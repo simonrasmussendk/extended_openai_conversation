@@ -12,6 +12,15 @@ DEFAULT_SKIP_AUTHENTICATION = False
 EVENT_AUTOMATION_REGISTERED = "automation_registered_via_extended_openai_conversation"
 EVENT_CONVERSATION_FINISHED = "extended_openai_conversation.conversation.finished"
 
+# Conversation memory store constants
+CONF_CONVERSATION_EXPIRATION_TIME = "conversation_expiration_time"
+DEFAULT_CONVERSATION_EXPIRATION_TIME = 600  # 10 minutes in seconds
+DATA_CONVERSATION_STORE = "conversation_store"
+
+# Service names
+SERVICE_QUERY_IMAGE = "query_image"
+SERVICE_CLEAR_CONVERSATIONS = "clear_conversations"
+
 CONF_PROMPT = "prompt"
 DEFAULT_PROMPT = """I want you to act as smart home manager of Home Assistant.
 I will provide information of smart home along with a question, you will truthfully make correction or answer using information provided in one sentence in everyday language.
@@ -93,7 +102,5 @@ DEFAULT_CONTEXT_THRESHOLD = 13000
 CONTEXT_TRUNCATE_STRATEGIES = [{"key": "clear", "label": "Clear All Messages"}]
 CONF_CONTEXT_TRUNCATE_STRATEGY = "context_truncate_strategy"
 DEFAULT_CONTEXT_TRUNCATE_STRATEGY = CONTEXT_TRUNCATE_STRATEGIES[0]["key"]
-
-SERVICE_QUERY_IMAGE = "query_image"
 
 CONF_PAYLOAD_TEMPLATE = "payload_template"

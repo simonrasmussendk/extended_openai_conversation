@@ -41,6 +41,7 @@ from .const import (
     CONF_CHAT_MODEL,
     CONF_CONTEXT_THRESHOLD,
     CONF_CONTEXT_TRUNCATE_STRATEGY,
+    CONF_CONVERSATION_EXPIRATION_TIME,
     CONF_FUNCTIONS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     CONF_MAX_TOKENS,
@@ -55,6 +56,7 @@ from .const import (
     DEFAULT_CONF_FUNCTIONS,
     DEFAULT_CONTEXT_THRESHOLD,
     DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+    DEFAULT_CONVERSATION_EXPIRATION_TIME,
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_TOKENS,
     DEFAULT_PROMPT,
@@ -65,6 +67,7 @@ from .const import (
     DOMAIN,
     EVENT_CONVERSATION_FINISHED,
 )
+from .conversation_store import ConversationStore
 from .exceptions import (
     FunctionLoadFailed,
     FunctionNotFound,
@@ -76,6 +79,7 @@ from .helpers import (
     get_function_executor,
     is_azure,
     validate_authentication,
+    log_openai_interaction,
 )
 from .services import async_setup_services
 
@@ -86,10 +90,16 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 # hass.data key for agent.
 DATA_AGENT = "agent"
+DATA_CONVERSATION_STORE = "conversation_store"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up OpenAI Conversation."""
+    # Create a shared conversation store for all agents
+    conversation_store = ConversationStore(DEFAULT_CONVERSATION_EXPIRATION_TIME)
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][DATA_CONVERSATION_STORE] = conversation_store
+    
     await async_setup_services(hass, config)
     return True
 
@@ -114,7 +124,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except OpenAIError as err:
         raise ConfigEntryNotReady(err) from err
 
-    agent = OpenAIAgent(hass, entry)
+    # Get the shared conversation store
+    conversation_store = hass.data[DOMAIN].get(DATA_CONVERSATION_STORE)
+    if conversation_store is None:
+        # Create one if not exists (should not happen normally)
+        conversation_store = ConversationStore(DEFAULT_CONVERSATION_EXPIRATION_TIME)
+        hass.data[DOMAIN][DATA_CONVERSATION_STORE] = conversation_store
+
+    agent = OpenAIAgent(hass, entry, conversation_store)
 
     data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
     data[CONF_API_KEY] = entry.data[CONF_API_KEY]
@@ -134,11 +151,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 class OpenAIAgent(conversation.AbstractConversationAgent):
     """OpenAI conversation agent."""
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, conversation_store: ConversationStore) -> None:
         """Initialize the agent."""
         self.hass = hass
         self.entry = entry
-        self.history: dict[str, list[dict]] = {}
+        self.conversation_store = conversation_store
         base_url = entry.data.get(CONF_BASE_URL)
         if is_azure(base_url):
             self.client = AsyncAzureOpenAI(
@@ -166,12 +183,22 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
     ) -> conversation.ConversationResult:
         exposed_entities = self.get_exposed_entities()
 
-        if user_input.conversation_id in self.history:
+        # Clean expired conversations
+        self.conversation_store.clean_expired_conversations()
+
+        # Check if an existing conversation is provided
+        if user_input.conversation_id:
+            # Try to get existing conversation from the store
+            messages = self.conversation_store.get_conversation(user_input.conversation_id)
             conversation_id = user_input.conversation_id
-            messages = self.history[conversation_id]
         else:
+            # Generate a new conversation ID
             conversation_id = ulid.ulid()
             user_input.conversation_id = conversation_id
+            messages = None
+
+        # If no existing messages were found (new conversation or expired), create the system message
+        if not messages:
             try:
                 system_message = self._generate_system_message(
                     exposed_entities, user_input
@@ -187,6 +214,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                     response=intent_response, conversation_id=conversation_id
                 )
             messages = [system_message]
+        
         user_message = {"role": "user", "content": user_input.text}
         if self.entry.options.get(CONF_ATTACH_USERNAME, DEFAULT_ATTACH_USERNAME):
             user = user_input.context.user_id
@@ -219,7 +247,9 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             )
 
         messages.append(query_response.message.model_dump(exclude_none=True))
-        self.history[conversation_id] = messages
+        
+        # Save the updated conversation to the store
+        self.conversation_store.save_conversation(conversation_id, messages)
 
         self.hass.bus.async_fire(
             EVENT_CONVERSATION_FINISHED,
@@ -342,6 +372,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             CONF_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_THRESHOLD
         )
         functions = list(map(lambda s: s["spec"], self.get_functions()))
+
         function_call = "auto"
         if n_requests == self.entry.options.get(
             CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
@@ -360,6 +391,17 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             tool_kwargs = {}
 
         _LOGGER.info("Prompt for %s: %s", model, json.dumps(messages))
+        
+        # Create request data for logging
+        request_data = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "temperature": temperature,
+            "user": user_input.conversation_id,
+            **tool_kwargs
+        }
 
         response: ChatCompletion = await self.client.chat.completions.create(
             model=model,
@@ -370,6 +412,10 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             user=user_input.conversation_id,
             **tool_kwargs,
         )
+        
+        # Log the API interaction to a temp file
+        response_dict = response.model_dump(exclude_none=True)
+        log_openai_interaction(self.hass, request_data, response_dict)
 
         _LOGGER.info("Response %s", json.dumps(response.model_dump(exclude_none=True)))
 
@@ -380,10 +426,13 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         message = choice.message
 
         if choice.finish_reason == "function_call":
+            _LOGGER.info("Function call detected: %s", message.function_call.name)
             return await self.execute_function_call(
                 user_input, messages, message, exposed_entities, n_requests + 1
             )
         if choice.finish_reason == "tool_calls":
+            tool_call_names = [tool.function.name for tool in message.tool_calls]
+            _LOGGER.info("Tool calls detected: %s", ", ".join(tool_call_names))
             return await self.execute_tool_calls(
                 user_input, messages, message, exposed_entities, n_requests + 1
             )
@@ -425,6 +474,9 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         n_requests,
         function,
     ) -> OpenAIQueryResponse:
+        # First append the assistant message with function_call to the conversation history
+        messages.append(message.model_dump(exclude_none=True))
+        
         function_executor = get_function_executor(function["function"]["type"])
 
         try:
@@ -432,17 +484,28 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         except json.decoder.JSONDecodeError as err:
             raise ParseArgumentsFailed(message.function_call.arguments) from err
 
+        # Execute the function
         result = await function_executor.execute(
             self.hass, function["function"], arguments, user_input, exposed_entities
         )
 
-        messages.append(
-            {
-                "role": "function",
-                "name": message.function_call.name,
-                "content": str(result),
-            }
+        # Create a function response message
+        function_message = {
+            "role": "function",
+            "name": message.function_call.name,
+            "content": str(result),
+        }
+        
+        # Append the function response to conversation history
+        messages.append(function_message)
+        
+        _LOGGER.debug(
+            "Added function response for %s: %s",
+            message.function_call.name,
+            str(result),
         )
+        
+        # Continue the conversation with the updated message history
         return await self.query(user_input, messages, exposed_entities, n_requests)
 
     async def execute_tool_calls(
@@ -453,31 +516,48 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         exposed_entities,
         n_requests,
     ) -> OpenAIQueryResponse:
+        # First append the assistant message with tool_calls to the conversation history
         messages.append(message.model_dump(exclude_none=True))
+        
+        # Process each tool call sequentially
         for tool in message.tool_calls:
             function_name = tool.function.name
             function = next(
                 (s for s in self.get_functions() if s["spec"]["name"] == function_name),
                 None,
             )
+            
             if function is not None:
+                # Execute the tool function
                 result = await self.execute_tool_function(
                     user_input,
                     tool,
                     exposed_entities,
                     function,
                 )
-
-                messages.append(
-                    {
-                        "tool_call_id": tool.id,
-                        "role": "tool",
-                        "name": function_name,
-                        "content": str(result),
-                    }
+                
+                # Create a tool response message with the correct tool_call_id
+                tool_message = {
+                    "role": "tool",
+                    "tool_call_id": tool.id,
+                    "name": function_name,
+                    "content": result,
+                }
+                
+                # Append the tool response to conversation history
+                messages.append(tool_message)
+                
+                _LOGGER.debug(
+                    "Added tool response for %s (id: %s): %s",
+                    function_name,
+                    tool.id,
+                    result,
                 )
             else:
                 raise FunctionNotFound(function_name)
+                
+        # Continue the conversation with the updated message history
+        _LOGGER.debug("Messages after tool calls: %s", json.dumps(messages[-5:]))
         return await self.query(user_input, messages, exposed_entities, n_requests)
 
     async def execute_tool_function(
@@ -486,7 +566,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         tool,
         exposed_entities,
         function,
-    ) -> OpenAIQueryResponse:
+    ) -> str:
         function_executor = get_function_executor(function["function"]["type"])
 
         try:
@@ -497,7 +577,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         result = await function_executor.execute(
             self.hass, function["function"], arguments, user_input, exposed_entities
         )
-        return result
+        return str(result)
 
 
 class OpenAIQueryResponse:

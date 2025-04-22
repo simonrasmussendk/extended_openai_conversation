@@ -21,7 +21,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, selector
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, SERVICE_QUERY_IMAGE
+from .const import (
+    DOMAIN,
+    SERVICE_QUERY_IMAGE,
+    SERVICE_CLEAR_CONVERSATIONS,
+    DATA_CONVERSATION_STORE,
+)
 
 QUERY_IMAGE_SCHEMA = vol.Schema(
     {
@@ -34,6 +39,12 @@ QUERY_IMAGE_SCHEMA = vol.Schema(
         vol.Required("prompt"): cv.string,
         vol.Required("images"): vol.All(cv.ensure_list, [{"url": cv.string}]),
         vol.Optional("max_tokens", default=300): cv.positive_int,
+    }
+)
+
+CLEAR_CONVERSATIONS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("conversation_id"): cv.string,
     }
 )
 
@@ -74,12 +85,42 @@ async def async_setup_services(hass: HomeAssistant, config: ConfigType) -> None:
 
         return response_dict
 
+    async def clear_conversations(call: ServiceCall) -> None:
+        """Clear conversations from the memory store."""
+        conversation_store = hass.data[DOMAIN].get(DATA_CONVERSATION_STORE)
+        if not conversation_store:
+            _LOGGER.warning("Conversation store not found")
+            return
+
+        conversation_id = call.data.get("conversation_id")
+        if conversation_id:
+            # Clear a specific conversation
+            existing_conversation = conversation_store.get_conversation(conversation_id)
+            if existing_conversation:
+                # Save an empty conversation to effectively remove it
+                conversation_store.save_conversation(conversation_id, [])
+                _LOGGER.info(f"Cleared conversation with ID: {conversation_id}")
+            else:
+                _LOGGER.warning(f"Conversation with ID {conversation_id} not found")
+        else:
+            # Clear all conversations
+            conversation_store.clear_all()
+            _LOGGER.info("All conversations cleared")
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_QUERY_IMAGE,
         query_image,
         schema=QUERY_IMAGE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
+    )
+
+    # Register the clear conversations service
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_CONVERSATIONS,
+        clear_conversations,
+        schema=CLEAR_CONVERSATIONS_SCHEMA,
     )
 
 

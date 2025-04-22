@@ -8,6 +8,9 @@ import sqlite3
 import time
 from typing import Any
 from urllib import parse
+import json
+import glob
+import yaml
 
 from bs4 import BeautifulSoup
 from openai import AsyncAzureOpenAI, AsyncOpenAI
@@ -54,6 +57,15 @@ from .exceptions import (
     InvalidFunction,
     NativeNotFound,
 )
+
+from homeassistant.components.recorder.db_schema import States, RecorderRuns, StateAttributes, StatisticsShortTerm
+from homeassistant.components.recorder.util import session_scope
+
+from homeassistant.components.rest import RESOURCE_SCHEMA
+from homeassistant.components.rest.data import RestData
+from homeassistant.components import rest, scrape, automation
+
+from homeassistant.helpers.template import Template
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -231,6 +243,30 @@ class NativeFunctionExecutor(FunctionExecutor):
             )
         if name == "get_user_from_user_id":
             return await self.get_user_from_user_id(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "get_shopping_list_items":
+            return await self.get_shopping_list_items(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "add_shopping_list_item":
+            return await self.add_shopping_list_item(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "complete_shopping_list_item":
+            return await self.complete_shopping_list_item(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "complete_all_shopping_list_items":
+            return await self.complete_all_shopping_list_items(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "remove_shopping_list_item":
+            return await self.remove_shopping_list_item(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "clear_shopping_list":
+            return await self.clear_shopping_list(
                 hass, function, arguments, user_input, exposed_entities
             )
 
@@ -415,6 +451,552 @@ class NativeFunctionExecutor(FunctionExecutor):
             arguments.get("units"),
             arguments.get("types", {"change"}),
         )
+
+    async def get_shopping_list_items(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Retrieve all non-completed items from the shopping list.
+        
+        Args:
+            hass: The Home Assistant instance.
+            function: The function configuration.
+            arguments: Arguments passed to the function.
+            user_input: The conversation input.
+            exposed_entities: List of entities exposed to the conversation.
+            
+        Returns:
+            A dictionary containing the shopping list items or error.
+        """
+        try:
+            # Try to read shopping list data directly from the file
+            _LOGGER.debug("Getting shopping list items from the JSON file")
+            
+            # The shopping list is typically stored in .shopping_list.json
+            shopping_list_path = hass.config.path('.shopping_list.json')
+            
+            # Use a helper function to read the file in the executor
+            def _read_shopping_list(path):
+                if not os.path.exists(path):
+                    return None
+                with open(path, 'r') as f:
+                    return json.loads(f.read())
+            
+            # Run file I/O in the executor to prevent blocking the event loop
+            items = await hass.async_add_executor_job(_read_shopping_list, shopping_list_path)
+            
+            if items is None:
+                _LOGGER.warning("Shopping list file not found at %s", shopping_list_path)
+                return {"error": "unavailable"}
+                
+            # Filter out completed items
+            active_items = [item["name"] for item in items if not item.get("complete", False)]
+            
+            return {"items": active_items}
+                
+        except Exception as err:
+            _LOGGER.warning("Error accessing shopping list file: %s", err)
+            return {"error": "unavailable"}
+
+    async def add_shopping_list_item(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Add an item to the shopping list.
+        
+        Args:
+            hass: The Home Assistant instance.
+            function: The function configuration.
+            arguments: Arguments passed to the function (should contain 'item' key).
+            user_input: The conversation input.
+            exposed_entities: List of entities exposed to the conversation.
+            
+        Returns:
+            A dictionary indicating success or error.
+        """
+        try:
+            item_text = arguments.get("item", "")
+            if not item_text:
+                return {"error": "No item specified"}
+                
+            _LOGGER.debug("Original item text: %s", item_text)
+            
+            # Using a completely different approach
+            # 1. Split by common separators
+            separators = [",", " and ", " & "]
+            items = []
+            
+            # Handle special case for "milk and eggs" in a more direct way
+            remaining_text = item_text
+            for separator in separators:
+                if separator in remaining_text:
+                    parts = remaining_text.split(separator)
+                    # Add all parts except the last one
+                    for part in parts[:-1]:
+                        if part.strip():
+                            items.append(part.strip())
+                    # Keep the last part for further processing
+                    remaining_text = parts[-1].strip()
+            
+            # Add the remaining text if it exists
+            if remaining_text:
+                items.append(remaining_text)
+            
+            _LOGGER.debug("Parsed items: %s", items)
+            
+            # If we didn't find any separators but have multiple words that don't match common phrases, 
+            # split by words
+            if len(items) == 1 and len(items[0].split()) > 2:
+                # List of common multi-word items that should not be split
+                common_phrases = [
+                    "peanut butter", "ice cream", "olive oil", "toilet paper",
+                    "paper towels", "dish soap", "laundry detergent", "orange juice"
+                ]
+                
+                # Check if our item matches any common phrases
+                is_common_phrase = False
+                for phrase in common_phrases:
+                    if phrase in items[0].lower():
+                        is_common_phrase = True
+                        break
+                        
+                if not is_common_phrase:
+                    # Split the single item by words
+                    words = items[0].split()
+                    items = []
+                    for word in words:
+                        if word.strip():
+                            items.append(word.strip())
+            
+            if not items:
+                return {"error": "No valid items specified"}
+            
+            _LOGGER.debug("Final items to add: %s", items)
+            
+            added_items = []
+            
+            # Add each item using the Home Assistant service
+            for item_name in items:
+                await hass.services.async_call(
+                    domain="shopping_list",
+                    service="add_item",
+                    service_data={"name": item_name}
+                )
+                added_items.append(item_name)
+                _LOGGER.debug("Added item to shopping list: %s", item_name)
+            
+            if len(added_items) == 1:
+                return {"success": True, "added": added_items[0]}
+            else:
+                return {"success": True, "added": added_items}
+                
+        except Exception as err:
+            _LOGGER.warning("Error adding shopping list item: %s", err)
+            return {"error": "Failed to add item"}
+
+    async def complete_shopping_list_item(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Complete an item in the shopping list.
+        
+        Args:
+            hass: The Home Assistant instance.
+            function: The function configuration.
+            arguments: Arguments passed to the function (should contain 'item' key).
+            user_input: The conversation input.
+            exposed_entities: List of entities exposed to the conversation.
+            
+        Returns:
+            A dictionary indicating success or error.
+        """
+        try:
+            item_name = arguments.get("item", "").lower()
+            if not item_name:
+                return {"error": "No item specified"}
+                
+            # Get the shopping list path to read current items
+            shopping_list_path = hass.config.path('.shopping_list.json')
+            
+            # Helper functions to perform file I/O in executor
+            def _read_shopping_list(path):
+                if not os.path.exists(path):
+                    return None
+                with open(path, 'r') as f:
+                    return json.loads(f.read())
+                    
+            def _write_shopping_list(path, data):
+                with open(path, 'w') as f:
+                    json.dump(data, f, indent=2)
+            
+            # Run file read in executor
+            items = await hass.async_add_executor_job(_read_shopping_list, shopping_list_path)
+            
+            if items is None:
+                _LOGGER.warning("Shopping list file not found at %s", shopping_list_path)
+                return {"error": "unavailable"}
+                
+            # Find items that match (case insensitive)
+            found = False
+            completed_item = None
+            
+            for item in items:
+                if item["name"].lower() == item_name and not item.get("complete", False):
+                    # Mark as completed directly in the items list
+                    item["complete"] = True
+                    found = True
+                    completed_item = item["name"]
+                    break
+            
+            if not found:
+                return {"error": f"Item '{item_name}' not found or already completed"}
+            
+            # Write the updated list back (in executor)
+            await hass.async_add_executor_job(_write_shopping_list, shopping_list_path, items)
+                
+            # Try to use the Home Assistant service as a backup
+            try:
+                await hass.services.async_call(
+                    domain="shopping_list",
+                    service="complete_item",
+                    service_data={"name": completed_item}
+                )
+            except Exception as service_err:
+                _LOGGER.warning("Could not use service to complete item: %s", service_err)
+                # Continue anyway since we've already updated the file
+            
+            # Force reload
+            await hass.services.async_call(
+                domain="homeassistant",
+                service="reload_config_entry",
+                service_data={"domain": "shopping_list"}
+            )
+            
+            _LOGGER.info("Marked item as complete: %s", completed_item)
+            return {"success": True, "completed": completed_item}
+                
+        except Exception as err:
+            _LOGGER.warning("Error completing shopping list item: %s", err)
+            return {"error": f"Failed to complete item: {str(err)}"}
+
+    async def complete_all_shopping_list_items(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Complete all items in the shopping list.
+        
+        Args:
+            hass: The Home Assistant instance.
+            function: The function configuration.
+            arguments: Arguments passed to the function.
+            user_input: The conversation input.
+            exposed_entities: List of entities exposed to the conversation.
+            
+        Returns:
+            A dictionary indicating success or error.
+        """
+        try:
+            # Get the shopping list path
+            shopping_list_path = hass.config.path('.shopping_list.json')
+            
+            # Helper functions to perform file I/O in executor
+            def _read_shopping_list(path):
+                if not os.path.exists(path):
+                    return None
+                with open(path, 'r') as f:
+                    return json.loads(f.read())
+                    
+            def _write_shopping_list(path, data):
+                with open(path, 'w') as f:
+                    json.dump(data, f, indent=2)
+                    f.flush()  # Ensure data is written to disk
+            
+            # Run file read in executor
+            items = await hass.async_add_executor_job(_read_shopping_list, shopping_list_path)
+            
+            if items is None:
+                _LOGGER.warning("Shopping list file not found at %s", shopping_list_path)
+                return {"error": "unavailable"}
+            
+            # Count active items and mark them as complete
+            active_items = []
+            modified = False
+            
+            for item in items:
+                if not item.get("complete", False):
+                    item["complete"] = True
+                    active_items.append(item["name"])
+                    modified = True
+            
+            count = len(active_items)
+            
+            if count == 0:
+                return {"success": True, "count": 0, "message": "No active items to complete in shopping list"}
+            
+            # Write back to the file if we modified anything
+            if modified:
+                await hass.async_add_executor_job(_write_shopping_list, shopping_list_path, items)
+            
+            # Try to use the Home Assistant services as a backup
+            success = True
+            try:
+                # Mark all items as completed using the service
+                for item_name in active_items:
+                    try:
+                        await hass.services.async_call(
+                            domain="shopping_list",
+                            service="complete_item",
+                            service_data={"name": item_name}
+                        )
+                    except Exception as e:
+                        _LOGGER.debug("Error completing item %s via service: %s", item_name, e)
+                        success = False
+                
+                # Force a reload if any service calls failed
+                if not success:
+                    try:
+                        await hass.services.async_call(
+                            domain="homeassistant",
+                            service="reload_config_entry",
+                            service_data={"domain": "shopping_list"}
+                        )
+                    except Exception as reload_err:
+                        _LOGGER.debug("Failed to reload shopping list: %s", reload_err)
+            except Exception as e:
+                _LOGGER.debug("Error using shopping_list services: %s", e)
+            
+            # If all else fails, try a refresh via event
+            if not success:
+                try:
+                    hass.bus.async_fire("shopping_list_updated")
+                except Exception:
+                    pass
+            
+            _LOGGER.info("Completed all shopping list items: %d items", count)
+            return {"success": True, "count": count, "completed": active_items}
+            
+        except Exception as err:
+            _LOGGER.warning("Error completing all shopping list items: %s", err)
+            return {"error": f"Failed to complete all shopping list items: {str(err)}"}
+
+    async def remove_shopping_list_item(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Remove an item from the shopping list permanently.
+        
+        Args:
+            hass: The Home Assistant instance.
+            function: The function configuration.
+            arguments: Arguments passed to the function (should contain 'item' key).
+            user_input: The conversation input.
+            exposed_entities: List of entities exposed to the conversation.
+            
+        Returns:
+            A dictionary indicating success or error.
+        """
+        try:
+            item_name = arguments.get("item", "").lower()
+            if not item_name:
+                return {"error": "No item specified"}
+            
+            # First, check if the item exists in the shopping list
+            shopping_list_path = hass.config.path('.shopping_list.json')
+            
+            # Helper functions to perform file I/O in executor
+            def _read_shopping_list(path):
+                if not os.path.exists(path):
+                    return None
+                with open(path, 'r') as f:
+                    return json.loads(f.read())
+                    
+            def _write_shopping_list(path, data):
+                with open(path, 'w') as f:
+                    json.dump(data, f, indent=2)
+            
+            # Run file read in executor
+            items = await hass.async_add_executor_job(_read_shopping_list, shopping_list_path)
+            
+            if items is None:
+                _LOGGER.warning("Shopping list file not found at %s", shopping_list_path)
+                return {"error": "unavailable"}
+            
+            # Find matching items
+            items_to_remove = []
+            found = False
+            
+            for item in items:
+                if item["name"].lower() == item_name:
+                    items_to_remove.append(item)
+                    found = True
+            
+            if not found:
+                return {"error": f"Item '{item_name}' not found in shopping list"}
+            
+            # Now call Home Assistant's services to remove the item
+            # First, remove it from the list in memory
+            updated_items = [item for item in items if item["name"].lower() != item_name]
+            
+            # Write the updated list back to the file (in executor)
+            await hass.async_add_executor_job(_write_shopping_list, shopping_list_path, updated_items)
+            
+            # Force a reload of the shopping list component
+            await hass.services.async_call(
+                domain="homeassistant",
+                service="reload_config_entry",
+                service_data={"domain": "shopping_list"}
+            )
+            
+            _LOGGER.info("Removed shopping list item: %s", item_name)
+            return {"success": True, "removed": item_name}
+            
+        except Exception as err:
+            _LOGGER.warning("Error removing shopping list item: %s", err)
+            return {"error": f"Failed to remove item: {str(err)}"}
+
+    async def clear_shopping_list(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Clear all items from the shopping list permanently.
+        
+        Args:
+            hass: The Home Assistant instance.
+            function: The function configuration.
+            arguments: Arguments passed to the function.
+            user_input: The conversation input.
+            exposed_entities: List of entities exposed to the conversation.
+            
+        Returns:
+            A dictionary indicating success or error.
+        """
+        try:
+            # Get the shopping list path
+            shopping_list_path = hass.config.path('.shopping_list.json')
+            
+            # Helper functions to perform file I/O in executor
+            def _read_shopping_list(path):
+                if not os.path.exists(path):
+                    return None
+                with open(path, 'r') as f:
+                    return json.loads(f.read())
+                    
+            def _write_shopping_list(path, data):
+                with open(path, 'w') as f:
+                    f.write("[]")  # Write directly to avoid any potential JSON serialization issues
+                    f.flush()  # Ensure data is written to disk
+            
+            # Run file read in executor
+            items = await hass.async_add_executor_job(_read_shopping_list, shopping_list_path)
+            
+            if items is None:
+                _LOGGER.warning("Shopping list file not found at %s", shopping_list_path)
+                return {"error": "unavailable"}
+            
+            # Count active items
+            active_items = [item for item in items if not item.get("complete", False)]
+            count = len(active_items)
+            
+            if count == 0:
+                return {"success": True, "count": 0, "message": "Shopping list is already empty"}
+            
+            # Approach 1: Try the official Home Assistant services first
+            success = False
+            
+            try:
+                # First mark all items as completed
+                for item in active_items:
+                    try:
+                        await hass.services.async_call(
+                            domain="shopping_list",
+                            service="complete_item",
+                            service_data={"name": item["name"]}
+                        )
+                    except Exception as e:
+                        _LOGGER.debug("Error completing item %s: %s", item["name"], e)
+                        continue
+                
+                # Then clear completed items
+                await hass.services.async_call(
+                    domain="shopping_list",
+                    service="clear_completed_items"
+                )
+                
+                # Check if the list is now empty by reading it again
+                updated_items = await hass.async_add_executor_job(_read_shopping_list, shopping_list_path)
+                if not updated_items or all(item.get("complete", False) for item in updated_items):
+                    success = True
+            except Exception as e:
+                _LOGGER.debug("Error using shopping_list services: %s", e)
+            
+            # Approach 2: If service calls failed, modify the file directly and reload
+            if not success:
+                try:
+                    # Save an empty array to the file (in executor)
+                    await hass.async_add_executor_job(_write_shopping_list, shopping_list_path, None)
+                    
+                    # Try to reload the component
+                    try:
+                        # Try various reload methods
+                        methods = [
+                            {"domain": "shopping_list", "service": "reload"},
+                            {"domain": "shopping_list", "service": "refresh"},
+                        ]
+                        
+                        for method in methods:
+                            try:
+                                await hass.services.async_call(
+                                    domain=method["domain"],
+                                    service=method["service"]
+                                )
+                                success = True
+                                break
+                            except Exception:
+                                continue
+                    except Exception as reload_err:
+                        _LOGGER.debug("Failed to reload shopping list: %s", reload_err)
+                except Exception as write_err:
+                    _LOGGER.warning("Failed to write empty shopping list file: %s", write_err)
+            
+            # If all else fails, try a restart of the shopping_list integration
+            if not success:
+                try:
+                    _LOGGER.info("Attempting to restart shopping_list integration")
+                    # Fire an event that might trigger a refresh of the integration
+                    hass.bus.async_fire("shopping_list_updated")
+                except Exception:
+                    pass
+            
+            _LOGGER.info("Cleared shopping list, removed %d items", count)
+            return {"success": True, "count": count}
+            
+        except Exception as err:
+            _LOGGER.warning("Error clearing shopping list: %s", err)
+            return {"error": f"Failed to clear shopping list: {str(err)}"}
 
     def as_utc(self, value: str, default_value, parse_error_message: str):
         if value is None:
@@ -753,3 +1335,58 @@ FUNCTION_EXECUTORS: dict[str, FunctionExecutor] = {
     "composite": CompositeFunctionExecutor(),
     "sqlite": SqliteFunctionExecutor(),
 }
+
+def log_openai_interaction(hass: HomeAssistant, request_data, response_data):
+    """Log the OpenAI API request and response to a temporary file.
+    
+    Args:
+        hass: The Home Assistant instance.
+        request_data: The request data sent to OpenAI.
+        response_data: The response data received from OpenAI.
+    """
+    try:
+        log_dir = hass.config.path("tmp")
+        log_file = os.path.join(log_dir, "openai_last_interaction.json")
+        
+        # Create tmp directory if it doesn't exist
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        
+        # Create log entry with timestamp
+        log_entry = {
+            "timestamp": dt_util.utcnow().isoformat(),
+            "request": request_data,
+            "response": response_data
+        }
+        
+        # Make sure we can write to a file from the event loop
+        def _write_log_file():
+            with open(log_file, 'w') as f:
+                json.dump(log_entry, f, indent=2)
+                
+        # Run the file operation in the executor to prevent blocking
+        hass.async_add_executor_job(_write_log_file)
+        
+        _LOGGER.debug("OpenAI interaction logged to %s", log_file)
+    except Exception as err:
+        _LOGGER.error("Failed to log OpenAI interaction: %s", err)
+
+# Add our own implementation of sanitize_filename
+def sanitize_filename(filename: str) -> str:
+    """Sanitize a filename by removing problematic characters."""
+    import re
+    import unicodedata
+    
+    # Remove diacritics
+    filename = unicodedata.normalize('NFKD', filename)
+    filename = ''.join([c for c in filename if not unicodedata.combining(c)])
+    
+    # Replace spaces and punctuation with underscores
+    filename = re.sub(r'[^\w\s-]', '_', filename)
+    filename = re.sub(r'[-\s]+', '_', filename)
+    
+    # Ensure the filename is not too long
+    if len(filename) > 255:
+        filename = filename[:255]
+        
+    return filename

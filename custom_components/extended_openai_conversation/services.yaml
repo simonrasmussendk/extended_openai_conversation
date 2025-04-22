@@ -10,7 +10,7 @@ query_image:
       selector:
         text:
     prompt:
-      example: "What’s in this image?"
+      example: "What's in this image?"
       required: true
       selector:
         text:
@@ -28,3 +28,13 @@ query_image:
         number:
           min: 1
           mode: box
+
+clear_conversations:
+  description: "Clear conversation history from memory store"
+  fields:
+    conversation_id:
+      description: "Optional conversation ID to clear. If not provided, all conversations will be cleared."
+      example: "01H1TXKTWZYWNCP6ZDC9WKH4QP"
+      required: false
+      selector:
+        text:
