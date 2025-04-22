@@ -1214,7 +1214,10 @@ class CompositeFunctionExecutor(FunctionExecutor):
         if not isinstance(value, dict):
             raise vol.Invalid("expected dictionary")
 
-        composite_schema = {vol.Optional("response_variable"): str}
+        composite_schema = {
+            vol.Optional("response_variable"): str,
+            vol.Optional("arguments"): dict,
+        }
         function_executor = get_function_executor(value["type"])
 
         return function_executor.data_schema.extend(composite_schema)(value)
@@ -1232,8 +1235,20 @@ class CompositeFunctionExecutor(FunctionExecutor):
 
         for executor_config in sequence:
             function_executor = get_function_executor(executor_config["type"])
+            
+            # Merge executor_config arguments with the function arguments if provided
+            executor_arguments = dict(arguments)
+            if "arguments" in executor_config:
+                for key, value in executor_config["arguments"].items():
+                    if isinstance(value, str) and value.startswith("{{") and value.endswith("}}"):
+                        # This is a template, evaluate it
+                        template = Template(value, hass)
+                        executor_arguments[key] = template.async_render(arguments)
+                    else:
+                        executor_arguments[key] = value
+            
             result = await function_executor.execute(
-                hass, executor_config, arguments, user_input, exposed_entities
+                hass, executor_config, executor_arguments, user_input, exposed_entities
             )
 
             response_variable = executor_config.get("response_variable")
