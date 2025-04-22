@@ -381,7 +381,8 @@ class NativeFunctionExecutor(FunctionExecutor):
         include_start_time_state = arguments.get("include_start_time_state", True)
         significant_changes_only = arguments.get("significant_changes_only", True)
         minimal_response = arguments.get("minimal_response", True)
-        no_attributes = arguments.get("no_attributes", True)
+        include_attributes = arguments.get("include_attributes", False)
+        no_attributes = not include_attributes
 
         now = dt_util.utcnow()
         one_day = timedelta(days=1)

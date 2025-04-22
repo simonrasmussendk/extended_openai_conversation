@@ -24,6 +24,10 @@
         end_time:
           type: string
           description: End of the history period in "%Y-%m-%dT%H:%M:%S%z".
+        include_attributes:
+          type: boolean
+          description: Whether to include entity attributes in the history data. Useful for device_tracker coordinates and other entity attributes.
+          default: false
       required:
       - entity_ids
   function:
@@ -32,6 +36,8 @@
       - type: native
         name: get_history
         response_variable: history_result
+        arguments:
+          include_attributes: "{{ include_attributes | default(false) }}"
       - type: template
         value_template: >-
           {% set ns = namespace(result = [], list = []) %}
