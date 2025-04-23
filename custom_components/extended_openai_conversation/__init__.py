@@ -27,6 +27,8 @@ from homeassistant.exceptions import (
 from homeassistant.helpers import (
     config_validation as cv,
     entity_registry as er,
+    device_registry as dr,
+    area_registry as ar,
     intent,
     template,
 )
@@ -273,22 +275,6 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         prompt = self._async_generate_prompt(raw_prompt, exposed_entities, user_input)
         return {"role": "system", "content": prompt}
 
-    def _async_generate_prompt(
-        self,
-        raw_prompt: str,
-        exposed_entities,
-        user_input: conversation.ConversationInput,
-    ) -> str:
-        """Generate a prompt for the user."""
-        return template.Template(raw_prompt, self.hass).async_render(
-            {
-                "ha_name": self.hass.config.location_name,
-                "exposed_entities": exposed_entities,
-                "current_device_id": user_input.device_id,
-            },
-            parse_result=False,
-        )
-
     def get_exposed_entities(self):
         states = [
             state
@@ -296,7 +282,10 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             if async_should_expose(self.hass, conversation.DOMAIN, state.entity_id)
         ]
         entity_registry = er.async_get(self.hass)
+        device_registry = dr.async_get(self.hass)
+        area_registry = ar.async_get(self.hass)
         exposed_entities = []
+        
         for state in states:
             entity_id = state.entity_id
             entity = entity_registry.async_get(entity_id)
@@ -304,6 +293,25 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             aliases = []
             if entity and entity.aliases:
                 aliases = entity.aliases
+            
+            # Get area information
+            area_id = None
+            area_name = None
+            
+            # First try to get area from the entity directly
+            if entity and entity.area_id:
+                area_id = entity.area_id
+                area = area_registry.async_get_area(area_id)
+                if area:
+                    area_name = area.name
+            # If no area on entity, try to get it from the device
+            elif entity and entity.device_id:
+                device = device_registry.async_get(entity.device_id)
+                if device and device.area_id:
+                    area_id = device.area_id
+                    area = area_registry.async_get_area(area_id)
+                    if area:
+                        area_name = area.name
 
             exposed_entities.append(
                 {
@@ -311,9 +319,43 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                     "name": state.name,
                     "state": self.hass.states.get(entity_id).state,
                     "aliases": aliases,
+                    "area_id": area_id,
+                    "area_name": area_name,
                 }
             )
         return exposed_entities
+    
+    def get_areas(self):
+        """Get all areas from the area registry."""
+        area_registry = ar.async_get(self.hass)
+        areas = []
+        
+        for area_id, area in area_registry.areas.items():
+            areas.append({
+                "area_id": area_id,
+                "name": area.name,
+                "aliases": area.aliases if hasattr(area, 'aliases') else [],
+            })
+            
+        return areas
+
+    def _async_generate_prompt(
+        self,
+        raw_prompt: str,
+        exposed_entities,
+        user_input: conversation.ConversationInput,
+    ) -> str:
+        """Generate a prompt for the user."""
+        areas = self.get_areas()
+        return template.Template(raw_prompt, self.hass).async_render(
+            {
+                "ha_name": self.hass.config.location_name,
+                "exposed_entities": exposed_entities,
+                "areas": areas,
+                "current_device_id": user_input.device_id,
+            },
+            parse_result=False,
+        )
 
     def get_functions(self):
         try:

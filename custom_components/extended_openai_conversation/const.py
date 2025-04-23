@@ -29,9 +29,17 @@ Current Time: {{now()}}
 
 Available Devices:
 ```csv
-entity_id,name,state,aliases
+entity_id,name,state,area,aliases
 {% for entity in exposed_entities -%}
-{{ entity.entity_id }},{{ entity.name }},{{ entity.state }},{{entity.aliases | join('/')}}
+{{ entity.entity_id }},{{ entity.name }},{{ entity.state }},{{ entity.area_name or "" }},{{entity.aliases | join('/')}}
+{% endfor -%}
+```
+
+Areas:
+```csv
+area_id,name,aliases
+{% for area in areas -%}
+{{ area.area_id }},{{ area.name }},{{ area.aliases | join('/') }}
 {% endfor -%}
 ```
 

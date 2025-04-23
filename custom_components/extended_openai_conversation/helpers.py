@@ -392,19 +392,34 @@ class NativeFunctionExecutor(FunctionExecutor):
         self.validate_entity_ids(hass, entity_ids, exposed_entities)
 
         with recorder.util.session_scope(hass=hass, read_only=True) as session:
-            result = await recorder.get_instance(hass).async_add_executor_job(
-                recorder.history.get_significant_states_with_session,
-                hass,
-                session,
-                start_time,
-                end_time,
-                entity_ids,
-                None,
-                include_start_time_state,
-                significant_changes_only,
-                minimal_response,
-                no_attributes,
-            )
+            history_instance = recorder.get_instance(hass)
+
+            if significant_changes_only:
+                history_func = recorder.history.get_significant_states_with_session
+                result = await history_instance.async_add_executor_job(
+                    history_func,
+                    hass,
+                    session,
+                    start_time,
+                    end_time,
+                    entity_ids,
+                    None,
+                    include_start_time_state,
+                    significant_changes_only,
+                    minimal_response,
+                    no_attributes,
+                )
+            else:
+                history_func = recorder.history.get_states_with_session
+                result = await history_instance.async_add_executor_job(
+                    history_func,
+                    hass,
+                    session,
+                    start_time,
+                    end_time,
+                    entity_ids,
+                    include_start_time_state,
+                )
 
         return [[self.as_dict(item) for item in sublist] for sublist in result.values()]
 
