@@ -8,6 +8,7 @@ Derived from [OpenAI Conversation](https://www.home-assistant.io/integrations/op
 - Ability to create automation
 - Ability to get data from external API or web page
 - Ability to retrieve state history of entities
+- Ability to retrieve attributes of multiple entities in a single call
 - Option to pass the current user's name to OpenAI via the user message context
 - Area support: entity areas are included in the prompt, along with a list of all available areas
 
@@ -123,6 +124,9 @@ Options include [OpenAI Conversation](https://www.home-assistant.io/integrations
         - `entity_id`(string): target entity
         - `device_id`(string): target device
         - `area_id`(string): target area
+    - `get_entity_attributes`
+      - `entity_ids`(array): a list of entity IDs to get attributes for
+      - `attributes`(array, optional): a list of specific attribute names to retrieve. If not provided, all attributes will be returned.
     - `add_automation`
       - `automation_config`(string): An automation configuration in a yaml format
     - `get_history`
@@ -467,6 +471,39 @@ Get state history of entities
 ```
 
 <img width="300" src="https://github.com/jekalmin/extended_openai_conversation/assets/2917984/32217f3d-10fc-4001-9028-717b1683573b">
+
+#### 3-3. Get Entity Attributes
+Get detailed attributes of one or more entities
+
+```yaml
+- spec:
+    name: get_entity_attributes
+    description: Get attributes of multiple Home Assistant entities in one call
+    parameters:
+      type: object
+      properties:
+        entity_ids:
+          type: array
+          items:
+            type: string
+          description: List of entity IDs to get attributes for
+        attributes:
+          type: array
+          items:
+            type: string
+          description: Optional list of specific attribute names to retrieve. If not provided, all attributes will be returned.
+      required:
+      - entity_ids
+  function:
+    type: native
+    name: get_entity_attributes
+```
+
+This function is particularly useful for getting detailed capabilities and state information from entities. For example:
+- Getting temperature ranges, modes, and current settings from climate devices
+- Retrieving color modes and supported features from lights
+- Checking available input sources for media players
+- Obtaining coordinates and other details from sensors
 
 ### 4. scrape
 #### 4-1. Get current HA version

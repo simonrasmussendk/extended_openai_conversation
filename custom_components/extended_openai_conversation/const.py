@@ -99,6 +99,33 @@ DEFAULT_CONF_FUNCTIONS = [
             },
         },
         "function": {"type": "native", "name": "execute_service"},
+    },
+    {
+        "spec": {
+            "name": "get_entity_attributes",
+            "description": "Use this function to get attributes of entities in Home Assistant. This provides more detailed information about one or more entities.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "List of entity IDs to get attributes for. Each entity_id must be from the available devices list.",
+                    },
+                    "attributes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional list of specific attribute names to retrieve. If not provided, all attributes will be returned.",
+                    }
+                },
+                "required": ["entity_ids"],
+            },
+        },
+        "function": {"type": "native", "name": "get_entity_attributes"},
     }
 ]
 CONF_ATTACH_USERNAME = "attach_username"

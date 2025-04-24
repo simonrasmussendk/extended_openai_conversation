@@ -269,6 +269,10 @@ class NativeFunctionExecutor(FunctionExecutor):
             return await self.clear_shopping_list(
                 hass, function, arguments, user_input, exposed_entities
             )
+        if name == "get_entity_attributes":
+            return await self.get_entity_attributes(
+                hass, function, arguments, user_input, exposed_entities
+            )
 
         raise NativeNotFound(name)
 
@@ -517,6 +521,43 @@ class NativeFunctionExecutor(FunctionExecutor):
         except Exception as err:
             _LOGGER.warning("Error accessing shopping list file: %s", err)
             return {"error": "unavailable"}
+
+    async def get_entity_attributes(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Get attributes for multiple entities in one call."""
+        entity_ids = arguments.get("entity_ids", [])
+        specific_attributes = arguments.get("attributes", [])
+        
+        self.validate_entity_ids(hass, entity_ids, exposed_entities)
+        
+        result = {}
+        for entity_id in entity_ids:
+            state = hass.states.get(entity_id)
+            if state:
+                if specific_attributes:
+                    # Only include requested attributes
+                    attributes = {}
+                    for attr in specific_attributes:
+                        if attr in state.attributes:
+                            attributes[attr] = state.attributes[attr]
+                    result[entity_id] = {
+                        "state": state.state,
+                        "attributes": attributes
+                    }
+                else:
+                    # Include all attributes
+                    result[entity_id] = {
+                        "state": state.state,
+                        "attributes": dict(state.attributes)
+                    }
+
+        return result
 
     async def add_shopping_list_item(
         self,
