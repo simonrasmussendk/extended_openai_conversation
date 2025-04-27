@@ -9,6 +9,7 @@ Derived from [OpenAI Conversation](https://www.home-assistant.io/integrations/op
 - Ability to get data from external API or web page
 - Ability to retrieve state history of entities
 - Ability to retrieve attributes of multiple entities in a single call
+- Domain-aware entity attributes for smart contextual responses
 - Option to pass the current user's name to OpenAI via the user message context
 - Area support: entity areas are included in the prompt, along with a list of all available areas
 
@@ -50,6 +51,17 @@ Do not restate or appreciate what user says, rather make a quick inquiry.
 ```
 
 This enables more natural interactions with your smart home, such as controlling all devices in a specific area or making area-aware decisions when responding to commands.
+
+## Domain-Aware Attributes
+The integration now supports automatically including relevant entity attributes for specific domains based on keywords in the user's query. For example, when you ask about "lights" or mention "brightness," the integration can automatically include detailed attributes of all light entities to provide more context to the AI.
+
+This allows for more intelligent responses without having to explicitly request entity attributes each time. The AI will have access to additional information such as:
+- Light brightness levels, color modes, and supported features
+- Climate settings like temperature, target temperature, and modes
+- Media player states and media information
+- And more...
+
+You can configure which domains and keywords should trigger attribute inclusion through the integration options.
 
 ## How it works
 Extended OpenAI Conversation uses OpenAI API's feature of [function calling](https://platform.openai.com/docs/guides/function-calling) to call service of Home Assistant.
@@ -96,12 +108,29 @@ https://github.com/jekalmin/extended_openai_conversation/assets/2917984/64ba656e
 ## Configuration
 ### Options
 By clicking a button from Edit Assist, Options can be customized.<br/>
-Options include [OpenAI Conversation](https://www.home-assistant.io/integrations/openai_conversation/) options and two new options. 
+Options include [OpenAI Conversation](https://www.home-assistant.io/integrations/openai_conversation/) options and the following additional options: 
 
 - `Attach Username`: Pass the active user's name (if applicable) to OpenAI via the message payload. Currently, this only applies to conversations through the UI or REST API.
 
 - `Maximum Function Calls Per Conversation`: limit the number of function calls in a single conversation.
 (Sometimes function is called over and over again, possibly running into infinite loop) 
+
+- `Domain Keywords`: Define domain-specific keywords that, when detected in user queries, will automatically include attributes for all entities in that domain. This provides better context for the AI without explicitly requesting attributes.
+
+  Example configuration:
+  ```yaml
+  - domain: light
+    keywords:
+      - brightness
+      - color
+      - dim
+  - domain: climate
+    keywords:
+      - temperature
+      - thermostat
+      - heat
+  ```
+
 - `Functions`: A list of mappings of function spec to function.
   - `spec`: Function which would be passed to [functions](https://platform.openai.com/docs/api-reference/chat/create#chat-create-functions) of [chat API](https://platform.openai.com/docs/api-reference/chat/create).
   - `function`: function that will be called.
@@ -127,6 +156,10 @@ Options include [OpenAI Conversation](https://www.home-assistant.io/integrations
     - `get_entity_attributes`
       - `entity_ids`(array): a list of entity IDs to get attributes for
       - `attributes`(array, optional): a list of specific attribute names to retrieve. If not provided, all attributes will be returned.
+    - `get_domain_entity_attributes` (used internally for domain keywords feature)
+      - `domain`(string): domain to get attributes for (e.g., "light", "climate")
+      - `exposed_entities`(array): list of exposed entities
+      - `attributes`(array, optional): specific attributes to include
     - `add_automation`
       - `automation_config`(string): An automation configuration in a yaml format
     - `get_history`
