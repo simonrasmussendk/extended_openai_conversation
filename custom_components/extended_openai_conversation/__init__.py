@@ -1,10 +1,13 @@
 """The OpenAI Conversation integration."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import Literal
-import asyncio
+from typing import Any, Literal
+
+import voluptuous as vol
+import yaml
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 from openai._exceptions import AuthenticationError, OpenAIError
@@ -13,7 +16,6 @@ from openai.types.chat.chat_completion import (
     ChatCompletionMessage,
     Choice,
 )
-import yaml
 
 from homeassistant.components import conversation
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
@@ -162,22 +164,35 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         self.hass = hass
         self.entry = entry
         self.conversation_store = conversation_store
-        base_url = entry.data.get(CONF_BASE_URL)
-        if is_azure(base_url):
-            self.client = AsyncAzureOpenAI(
-                api_key=entry.data[CONF_API_KEY],
-                azure_endpoint=base_url,
-                api_version=entry.data.get(CONF_API_VERSION),
-                organization=entry.data.get(CONF_ORGANIZATION),
-                http_client=get_async_client(hass),
-            )
-        else:
-            self.client = AsyncOpenAI(
-                api_key=entry.data[CONF_API_KEY],
-                base_url=base_url,
-                organization=entry.data.get(CONF_ORGANIZATION),
-                http_client=get_async_client(hass),
-            )
+        
+        # We'll initialize the client later to avoid blocking operations during __init__
+        self.client = None
+        self._initialize_client_task = hass.async_create_task(self._initialize_client())
+
+    async def _initialize_client(self):
+        """Initialize the OpenAI client in an executor to prevent blocking I/O."""
+        base_url = self.entry.data.get(CONF_BASE_URL)
+        
+        # Use an executor to prevent blocking I/O from distro library during initialization
+        def create_client():
+            if is_azure(base_url):
+                return AsyncAzureOpenAI(
+                    api_key=self.entry.data[CONF_API_KEY],
+                    azure_endpoint=base_url,
+                    api_version=self.entry.data.get(CONF_API_VERSION),
+                    organization=self.entry.data.get(CONF_ORGANIZATION),
+                    http_client=get_async_client(self.hass),
+                )
+            else:
+                return AsyncOpenAI(
+                    api_key=self.entry.data[CONF_API_KEY],
+                    base_url=base_url,
+                    organization=self.entry.data.get(CONF_ORGANIZATION),
+                    http_client=get_async_client(self.hass),
+                )
+        
+        # Run the creation in an executor
+        self.client = await self.hass.async_add_executor_job(create_client)
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -187,6 +202,21 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
+        # Make sure the client is initialized before proceeding
+        if self.client is None:
+            try:
+                await self._initialize_client_task
+            except Exception as err:
+                _LOGGER.error("Error initializing OpenAI client: %s", err)
+                intent_response = intent.IntentResponse(language=user_input.language)
+                intent_response.async_set_error(
+                    intent.IntentResponseErrorCode.UNKNOWN,
+                    f"Failed to initialize OpenAI client: {err}",
+                )
+                return conversation.ConversationResult(
+                    response=intent_response, conversation_id=user_input.conversation_id
+                )
+                
         exposed_entities = self.get_exposed_entities()
 
         # Clean expired conversations
@@ -554,19 +584,37 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             **tool_kwargs
         }
 
-        response: ChatCompletion = await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            temperature=temperature,
-            user=user_input.conversation_id,
-            **tool_kwargs,
-        )
-        
-        # Log the API interaction to a temp file
-        response_dict = response.model_dump(exclude_none=True)
-        log_openai_interaction(self.hass, request_data, response_dict)
+        try:
+            # Move the OpenAI API call to an executor to prevent blocking I/O operations
+            def execute_openai_request():
+                # Create a new event loop for the executor thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    # Run the async API call in the new event loop
+                    return loop.run_until_complete(
+                        self.client.chat.completions.create(
+                            model=model,
+                            messages=messages,
+                            max_tokens=max_tokens,
+                            top_p=top_p,
+                            temperature=temperature,
+                            user=user_input.conversation_id,
+                            **tool_kwargs,
+                        )
+                    )
+                finally:
+                    loop.close()
+            
+            # Run the OpenAI API call in an executor to prevent blocking I/O
+            response: ChatCompletion = await self.hass.async_add_executor_job(execute_openai_request)
+            
+            # Log the API interaction to a temp file
+            response_dict = response.model_dump(exclude_none=True)
+            log_openai_interaction(self.hass, request_data, response_dict)
+        except OpenAIError as err:
+            _LOGGER.error("OpenAI API error: %s", err)
+            raise
 
         _LOGGER.info("Response %s", json.dumps(response.model_dump(exclude_none=True)))
 
