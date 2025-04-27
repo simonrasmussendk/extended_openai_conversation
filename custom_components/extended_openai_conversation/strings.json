@@ -32,7 +32,8 @@
           "attach_username": "Attach Username to Message",
           "use_tools": "Use Tools",
           "context_threshold": "Context Threshold",
-          "context_truncate_strategy": "Context truncation strategy when exceeded threshold"
+          "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
+          "domain_keywords": "Domain keywords mapping for automatically adding entity attributes when keywords are detected in user input"
         }
       }
     }
@@ -54,7 +55,7 @@
         "prompt": {
           "name": "Prompt",
           "description": "The text to ask about image",
-          "example": "What’s in this image?"
+          "example": "What's in this image?"
         },
         "images": {
           "name": "Images",

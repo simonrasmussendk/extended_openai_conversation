@@ -139,3 +139,18 @@ CONF_CONTEXT_TRUNCATE_STRATEGY = "context_truncate_strategy"
 DEFAULT_CONTEXT_TRUNCATE_STRATEGY = CONTEXT_TRUNCATE_STRATEGIES[0]["key"]
 
 CONF_PAYLOAD_TEMPLATE = "payload_template"
+
+# Domain keyword mapping configuration
+CONF_DOMAIN_KEYWORDS = "domain_keywords"
+DEFAULT_DOMAIN_KEYWORDS = """# Example format for domain keywords:
+- domain: light
+  keywords:
+    - brightness
+    - color
+    - dim
+- domain: climate
+  keywords:
+    - temperature
+    - thermostat
+    - heat
+"""

@@ -168,6 +168,57 @@ async def validate_authentication(
     await hass.async_add_executor_job(partial(client.models.list, timeout=10))
 
 
+async def get_domain_entity_attributes(
+    hass: HomeAssistant,
+    domain: str,
+    exposed_entities,
+    attributes=None,
+):
+    """Retrieve attributes for all entities in a specific domain.
+    
+    Args:
+        hass: The Home Assistant instance.
+        domain: The domain for which to get attributes.
+        exposed_entities: A list of exposed entities.
+        attributes: Optional list of specific attributes to include.
+        
+    Returns:
+        A dictionary mapping entity_id to attributes for entities in the specified domain.
+    """
+    # Filter entities by the specified domain
+    domain_entities = [
+        entity for entity in exposed_entities 
+        if entity["entity_id"].split(".")[0] == domain
+    ]
+    
+    if not domain_entities:
+        return {}
+    
+    result = {}
+    for entity in domain_entities:
+        entity_id = entity["entity_id"]
+        state = hass.states.get(entity_id)
+        
+        if state:
+            # Get only specified attributes or all attributes
+            if attributes:
+                entity_attrs = {
+                    attr: state.attributes.get(attr)
+                    for attr in attributes
+                    if attr in state.attributes
+                }
+            else:
+                entity_attrs = dict(state.attributes)
+                
+            # Add the current state
+            entity_attrs["state"] = state.state
+            
+            # Add to result
+            result[entity_id] = entity_attrs
+            
+    return result
+
+
 class FunctionExecutor(ABC):
     def __init__(self, data_schema=vol.Schema({})) -> None:
         """initialize function executor"""
@@ -556,7 +607,7 @@ class NativeFunctionExecutor(FunctionExecutor):
                         "state": state.state,
                         "attributes": dict(state.attributes)
                     }
-
+        
         return result
 
     async def add_shopping_list_item(

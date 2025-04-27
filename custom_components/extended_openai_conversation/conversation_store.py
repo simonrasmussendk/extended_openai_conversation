@@ -50,10 +50,44 @@ class ConversationStore:
             messages: The list of message objects to store.
         """
         with self._lock:
-            self._store[conversation_id] = {
-                "messages": messages,
-                "last_accessed": time.time()
-            }
+            if conversation_id in self._store:
+                self._store[conversation_id]["messages"] = messages
+                self._store[conversation_id]["last_accessed"] = time.time()
+            else:
+                self._store[conversation_id] = {
+                    "messages": messages,
+                    "last_accessed": time.time(),
+                    "sent_domains": set()
+                }
+
+    def get_sent_domains(self, conversation_id: str) -> set:
+        """Get the set of domains that have already been sent in this conversation.
+        
+        Args:
+            conversation_id: The ID of the conversation.
+            
+        Returns:
+            A set of domain names or an empty set if conversation not found.
+        """
+        with self._lock:
+            if conversation_id in self._store:
+                if "sent_domains" not in self._store[conversation_id]:
+                    self._store[conversation_id]["sent_domains"] = set()
+                return self._store[conversation_id]["sent_domains"]
+            return set()
+    
+    def add_sent_domain(self, conversation_id: str, domain: str) -> None:
+        """Add a domain to the list of domains that have been sent in this conversation.
+        
+        Args:
+            conversation_id: The ID of the conversation.
+            domain: The domain to mark as sent.
+        """
+        with self._lock:
+            if conversation_id in self._store:
+                if "sent_domains" not in self._store[conversation_id]:
+                    self._store[conversation_id]["sent_domains"] = set()
+                self._store[conversation_id]["sent_domains"].add(domain)
             
     def clean_expired_conversations(self) -> int:
         """Remove conversations that have exceeded the expiration time.

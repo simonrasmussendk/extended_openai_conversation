@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Literal
+import asyncio
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 from openai._exceptions import AuthenticationError, OpenAIError
@@ -44,6 +45,7 @@ from .const import (
     CONF_CONTEXT_THRESHOLD,
     CONF_CONTEXT_TRUNCATE_STRATEGY,
     CONF_CONVERSATION_EXPIRATION_TIME,
+    CONF_DOMAIN_KEYWORDS,
     CONF_FUNCTIONS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     CONF_MAX_TOKENS,
@@ -59,6 +61,7 @@ from .const import (
     DEFAULT_CONTEXT_THRESHOLD,
     DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
     DEFAULT_CONVERSATION_EXPIRATION_TIME,
+    DEFAULT_DOMAIN_KEYWORDS,
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_TOKENS,
     DEFAULT_PROMPT,
@@ -82,6 +85,7 @@ from .helpers import (
     is_azure,
     validate_authentication,
     log_openai_interaction,
+    get_domain_entity_attributes,
 )
 from .services import async_setup_services
 
@@ -224,6 +228,15 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                 user_message[ATTR_NAME] = user
 
         messages.append(user_message)
+        
+        # Check for domain-specific keywords in user input and add relevant attributes
+        domain_attributes = await self.check_domain_keywords(user_input)
+        if domain_attributes:
+            attributes_message = {
+                "role": "system",
+                "content": f"Additional entity attributes for relevant domains based on keywords in user input(can in some cases be unrelated and ignored):\n```json\n{json.dumps(domain_attributes, default=str)}\n```\n"
+            }
+            messages.append(attributes_message)
 
         try:
             query_response = await self.query(user_input, messages, exposed_entities, 0)
@@ -338,6 +351,102 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             })
             
         return areas
+
+    async def check_domain_keywords(self, user_input: conversation.ConversationInput):
+        """Check if user input contains keywords for domains and add relevant entity attributes.
+        
+        Returns a dictionary of domain entity attributes that should be added to the system message.
+        
+        Expected format for domain_keywords config:
+        ```yaml
+        - domain: light
+          keywords:
+            - brightness
+            - color
+            - dim
+        - domain: climate
+          keywords:
+            - temperature
+            - thermostat
+            - heat
+        ```
+        """
+        domain_keywords = self.entry.options.get(CONF_DOMAIN_KEYWORDS, DEFAULT_DOMAIN_KEYWORDS)
+        if not domain_keywords:
+            return {}
+            
+        # Parse domain_keywords from YAML format
+        try:
+            domain_keywords_dict = yaml.safe_load(domain_keywords)
+            if not isinstance(domain_keywords_dict, list):
+                _LOGGER.error("Domain keywords configuration is not a list. Please follow the expected format.")
+                return {}
+        except yaml.YAMLError as err:
+            _LOGGER.error("Error parsing domain keywords YAML: %s", err)
+            return {}
+        except Exception as err:
+            _LOGGER.error("Unexpected error parsing domain keywords: %s", err)
+            return {}
+            
+        # Get exposed entities
+        exposed_entities = self.get_exposed_entities()
+        
+        # Get conversation ID and previously sent domains
+        conversation_id = user_input.conversation_id
+        sent_domains = self.conversation_store.get_sent_domains(conversation_id)
+        
+        # Check user input for keywords and gather attributes for matching domains
+        domain_attributes = {}
+        text = user_input.text.lower()
+        
+        for item in domain_keywords_dict:
+            # Validate item structure
+            if not isinstance(item, dict):
+                _LOGGER.warning("Invalid domain keyword item, expected dictionary: %s", item)
+                continue
+                
+            if "domain" not in item:
+                _LOGGER.warning("Missing 'domain' key in domain keyword item: %s", item)
+                continue
+                
+            if "keywords" not in item:
+                _LOGGER.warning("Missing 'keywords' key in domain keyword item: %s", item)
+                continue
+                
+            domain = item["domain"]
+            keywords = item["keywords"]
+            
+            # Ensure keywords is a list
+            if not isinstance(keywords, list):
+                _LOGGER.warning("Keywords must be a list for domain %s: %s", domain, keywords)
+                continue
+                
+            # Skip if this domain has already been sent in this conversation
+            if domain in sent_domains:
+                _LOGGER.debug("Domain %s already sent in this conversation, skipping", domain)
+                continue
+                
+            # Check if any keyword matches
+            if any(keyword.lower() in text for keyword in keywords):
+                # Get attributes for this domain
+                try:
+                    domain_attrs = await get_domain_entity_attributes(
+                        self.hass,
+                        domain,
+                        exposed_entities,
+                    )
+                    
+                    if domain_attrs:
+                        _LOGGER.debug("Found matching domain %s for keywords in text: %s", domain, text)
+                        domain_attributes[domain] = domain_attrs
+                        # Mark this domain as sent in this conversation
+                        self.conversation_store.add_sent_domain(conversation_id, domain)
+                    else:
+                        _LOGGER.debug("No entities found for domain %s", domain)
+                except Exception as err:
+                    _LOGGER.error("Error getting domain attributes for %s: %s", domain, err)
+                    
+        return domain_attributes
 
     def _async_generate_prompt(
         self,

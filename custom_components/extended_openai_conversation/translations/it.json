@@ -31,7 +31,8 @@
                     "attach_username": "Allega nome utente al messaggio",
                     "use_tools": "Utilizza strumenti",
                     "context_threshold": "Soglia di contesto",
-                    "context_truncate_strategy": "Strategia di troncamento del contesto quando superata la soglia"
+                    "context_truncate_strategy": "Strategia di troncamento del contesto quando superata la soglia",
+                    "domain_keywords": "Parole chiave per domini"
                 }
             }
         }

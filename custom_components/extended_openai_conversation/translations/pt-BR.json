@@ -32,7 +32,8 @@
                     "attach_username": "Anexar nome do usuário na mensagem",
                     "use_tools": "Use ferramentas",
                     "context_threshold": "Limite do contexto",
-                    "context_truncate_strategy": "Estratégia de truncamento de contexto quando o limite é excedido"
+                    "context_truncate_strategy": "Estratégia de truncamento de contexto quando o limite é excedido",
+                    "domain_keywords": "Palavras-chave para domínios"
                 }
             }
         }

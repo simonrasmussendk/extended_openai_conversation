@@ -57,6 +57,8 @@ from .const import (
     DEFAULT_TOP_P,
     DEFAULT_USE_TOOLS,
     DOMAIN,
+    CONF_DOMAIN_KEYWORDS,
+    DEFAULT_DOMAIN_KEYWORDS,
 )
 from .helpers import validate_authentication
 
@@ -90,6 +92,7 @@ DEFAULT_OPTIONS = types.MappingProxyType(
         CONF_USE_TOOLS: DEFAULT_USE_TOOLS,
         CONF_CONTEXT_THRESHOLD: DEFAULT_CONTEXT_THRESHOLD,
         CONF_CONTEXT_TRUNCATE_STRATEGY: DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+        CONF_DOMAIN_KEYWORDS: DEFAULT_DOMAIN_KEYWORDS,
     }
 )
 
@@ -167,7 +170,7 @@ class OptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        self._config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -177,7 +180,7 @@ class OptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(
                 title=user_input.get(CONF_NAME, DEFAULT_NAME), data=user_input
             )
-        schema = self.openai_config_option_schema(self.config_entry.options)
+        schema = self.openai_config_option_schema(self._config_entry.options)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema),
@@ -259,4 +262,9 @@ class OptionsFlow(config_entries.OptionsFlow):
                     mode=SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Optional(
+                CONF_DOMAIN_KEYWORDS,
+                description={"suggested_value": options.get(CONF_DOMAIN_KEYWORDS)},
+                default=DEFAULT_DOMAIN_KEYWORDS,
+            ): TemplateSelector(),
         }

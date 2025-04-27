@@ -32,7 +32,8 @@
                     "attach_username": "Gebruikersnaam aan bericht toevoegen",
                     "use_tools": "Use Tools",
                     "context_threshold": "Context Threshold",
-                    "context_truncate_strategy": "Context truncation strategy when exceeded threshold"
+                    "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
+                    "domain_keywords": "Domain Keywords"
                 }
             }
         }
