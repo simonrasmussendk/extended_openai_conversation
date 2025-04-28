@@ -76,6 +76,8 @@ from .const import (
 )
 from .conversation_store import ConversationStore
 from .exceptions import (
+    EntityNotExposed,
+    EntityNotFound,
     FunctionLoadFailed,
     FunctionNotFound,
     InvalidFunction,
@@ -727,21 +729,34 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             )
             
             if function is not None:
-                # Execute the tool function
-                result = await self.execute_tool_function(
-                    user_input,
-                    tool,
-                    exposed_entities,
-                    function,
-                )
-                
-                # Create a tool response message with the correct tool_call_id
-                tool_message = {
-                    "role": "tool",
-                    "tool_call_id": tool.id,
-                    "name": function_name,
-                    "content": result,
-                }
+                try:
+                    # Execute the tool function
+                    result = await self.execute_tool_function(
+                        user_input,
+                        tool,
+                        exposed_entities,
+                        function,
+                    )
+                    
+                    # Create a tool response message with the correct tool_call_id
+                    tool_message = {
+                        "role": "tool",
+                        "tool_call_id": tool.id,
+                        "name": function_name,
+                        "content": result,
+                    }
+                except (EntityNotExposed, EntityNotFound, HomeAssistantError) as err:
+                    # Catch entity-related and other HA errors and provide a proper tool response
+                    # instead of propagating the exception
+                    _LOGGER.error("Error executing tool call %s: %s", function_name, err)
+                    
+                    # Create a tool response message with the error
+                    tool_message = {
+                        "role": "tool",
+                        "tool_call_id": tool.id,
+                        "name": function_name,
+                        "content": json.dumps({"error": str(err)}),
+                    }
                 
                 # Append the tool response to conversation history
                 messages.append(tool_message)
@@ -750,10 +765,20 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                     "Added tool response for %s (id: %s): %s",
                     function_name,
                     tool.id,
-                    result,
+                    tool_message["content"],
                 )
             else:
-                raise FunctionNotFound(function_name)
+                # Create an error response for unknown functions instead of raising an exception
+                error_message = f"function '{function_name}' does not exist"
+                _LOGGER.error(error_message)
+                
+                tool_message = {
+                    "role": "tool",
+                    "tool_call_id": tool.id,
+                    "name": function_name,
+                    "content": json.dumps({"error": error_message}),
+                }
+                messages.append(tool_message)
                 
         # Continue the conversation with the updated message history
         _LOGGER.debug("Messages after tool calls: %s", json.dumps(messages[-5:]))

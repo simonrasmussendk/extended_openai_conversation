@@ -25,7 +25,13 @@ class EntityNotExposed(HomeAssistantError):
 
     def __str__(self) -> str:
         """Return string representation."""
-        return f"entity {self.entity_id} is not exposed"
+        entity_domain = self.entity_id.split('.')[0] if '.' in self.entity_id else ""
+        if entity_domain == "light":
+            return f"entity {self.entity_id} is not exposed. Try looking at the light group for this area instead, as individual lights are often not exposed while their groups are."
+        elif entity_domain:
+            return f"entity {self.entity_id} is not exposed. Try looking at {entity_domain} group entities for this area instead, as individual entities are sometimes not exposed while their groups are."
+        else:
+            return f"entity {self.entity_id} is not exposed"
 
 
 class CallServiceError(HomeAssistantError):
