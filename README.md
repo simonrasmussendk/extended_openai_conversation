@@ -23,37 +23,6 @@ The prompt includes area information for each entity and a comprehensive list of
 2. Access a full list of all areas with their IDs, names, and aliases
 3. Make better context-aware decisions about controlling devices based on their location
 
-Here's the updated default prompt:
-
-```yaml
-I want you to act as smart home manager of Home Assistant.
-I will provide information of smart home along with a question, you will truthfully make correction or answer using information provided in one sentence in everyday language.
-
-Current Time: {{now()}}
-
-Available Devices:
-```csv
-entity_id,name,state,area,aliases
-{% for entity in exposed_entities -%}
-{{ entity.entity_id }},{{ entity.name }},{{ entity.state }},{{ entity.area_name or "" }},{{entity.aliases | join('/')}}
-{% endfor -%}
-```
-
-Areas:
-```csv
-area_id,name,aliases
-{% for area in areas -%}
-{{ area.area_id }},{{ area.name }},{{ area.aliases | join('/') }}
-{% endfor -%}
-```
-
-The current state of devices is provided in available devices.
-Use execute_services function only for requested action, not for current states.
-Do not execute service without user's confirmation.
-Do not restate or appreciate what user says, rather make a quick inquiry.
-
-This enables more natural interactions with your smart home, such as controlling all devices in a specific area or making area-aware decisions when responding to commands.
-
 ## Domain-Aware Attributes
 
 The integration automatically includes relevant entity attributes for specific domains based on keywords in the user's query. When you ask about "lights" or mention "brightness," the integration automatically includes detailed attributes of all light entities to provide more context to the AI.
