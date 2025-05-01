@@ -224,8 +224,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         # Clean expired conversations
         self.conversation_store.clean_expired_conversations()
 
-        # Check if an existing conversation is provided
-        if user_input.conversation_id:
+        # Check if an existing conversation is provided and ensure it's a valid string
+        if user_input.conversation_id and isinstance(user_input.conversation_id, str) and user_input.conversation_id.strip():
             # Try to get existing conversation from the store
             messages = self.conversation_store.get_conversation(user_input.conversation_id)
             conversation_id = user_input.conversation_id
@@ -252,6 +252,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                     response=intent_response, conversation_id=conversation_id
                 )
             messages = [system_message]
+            # For new conversations, ensure we have an entry in the conversation store to track sent domains
+            self.conversation_store.save_conversation(conversation_id, messages)
         
         user_message = {"role": "user", "content": user_input.text}
         if self.entry.options.get(CONF_ATTACH_USERNAME, DEFAULT_ATTACH_USERNAME):
@@ -269,6 +271,9 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                 "content": f"Additional entity attributes for relevant domains based on keywords in user input(can in some cases be unrelated and ignored):\n```json\n{json.dumps(domain_attributes, default=str)}\n```\n"
             }
             messages.append(attributes_message)
+        
+        # Save the conversation with user message before processing to ensure sent_domains is updated
+        self.conversation_store.save_conversation(conversation_id, messages)
 
         try:
             query_response = await self.query(user_input, messages, exposed_entities, 0)
@@ -425,7 +430,15 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         
         # Get conversation ID and previously sent domains
         conversation_id = user_input.conversation_id
+        
+        # Ensure we have a valid conversation ID
+        if not conversation_id or not isinstance(conversation_id, str) or not conversation_id.strip():
+            _LOGGER.warning("Missing or invalid conversation_id when checking domain keywords")
+            return {}
+            
+        # Get sent domains for this conversation
         sent_domains = self.conversation_store.get_sent_domains(conversation_id)
+        _LOGGER.debug("Previously sent domains for conversation %s: %s", conversation_id, sent_domains)
         
         # Check user input for keywords and gather attributes for matching domains
         domain_attributes = {}
@@ -471,7 +484,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                     if domain_attrs:
                         _LOGGER.debug("Found matching domain %s for keywords in text: %s", domain, text)
                         domain_attributes[domain] = domain_attrs
-                        # Mark this domain as sent in this conversation
+                        # Mark this domain as sent in this conversation - must come before query is made
                         self.conversation_store.add_sent_domain(conversation_id, domain)
                     else:
                         _LOGGER.debug("No entities found for domain %s", domain)
