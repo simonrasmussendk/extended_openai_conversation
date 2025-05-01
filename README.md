@@ -51,7 +51,6 @@ The current state of devices is provided in available devices.
 Use execute_services function only for requested action, not for current states.
 Do not execute service without user's confirmation.
 Do not restate or appreciate what user says, rather make a quick inquiry.
-```
 
 This enables more natural interactions with your smart home, such as controlling all devices in a specific area or making area-aware decisions when responding to commands.
 
