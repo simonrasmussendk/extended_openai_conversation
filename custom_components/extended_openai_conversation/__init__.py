@@ -315,8 +315,31 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech(query_response.message.content)
         return conversation.ConversationResult(
-            response=intent_response, conversation_id=conversation_id
+            response=intent_response, conversation_id=conversation_id, continue_conversation=self.is_conversation_continued(messages)
         )
+    
+    def is_conversation_continued(self, messages: list[dict[str, str]]) -> bool:
+        """Determine if the conversation should continue based on the last assistant message.
+
+        Returns True if the last message is from the assistant and ends with a question mark.
+        """
+        if not messages:
+            return False
+
+        last_message = messages[-1]
+        if not isinstance(last_message, dict):
+            return False
+
+        # Only consider messages from the assistant
+        if last_message.get("role") != "assistant":
+            return False
+
+        content = last_message.get("content")
+        if not isinstance(content, str):
+            return False
+
+        # Check if the content ends with a question mark (half-width or CJK full-width)
+        return content.strip().endswith(("?", "？"))
 
     def _generate_system_message(
         self, exposed_entities, user_input: conversation.ConversationInput
