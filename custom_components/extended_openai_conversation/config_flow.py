@@ -41,6 +41,8 @@ from .const import (
     CONF_TEMPERATURE,
     CONF_TOP_P,
     CONF_USE_TOOLS,
+    CONF_VOICE_AUTH_ENABLED,
+    CONF_VOICE_USERS,
     CONTEXT_TRUNCATE_STRATEGIES,
     DEFAULT_ATTACH_USERNAME,
     DEFAULT_CHAT_MODEL,
@@ -56,6 +58,8 @@ from .const import (
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     DEFAULT_USE_TOOLS,
+    DEFAULT_VOICE_AUTH_ENABLED,
+    DEFAULT_VOICE_USERS,
     DOMAIN,
     CONF_DOMAIN_KEYWORDS,
     DEFAULT_DOMAIN_KEYWORDS,
@@ -93,6 +97,9 @@ DEFAULT_OPTIONS = types.MappingProxyType(
         CONF_CONTEXT_THRESHOLD: DEFAULT_CONTEXT_THRESHOLD,
         CONF_CONTEXT_TRUNCATE_STRATEGY: DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
         CONF_DOMAIN_KEYWORDS: DEFAULT_DOMAIN_KEYWORDS,
+        CONF_VOICE_AUTH_ENABLED: DEFAULT_VOICE_AUTH_ENABLED,
+        CONF_VOICE_USERS: yaml.dump(DEFAULT_VOICE_USERS),
+        # Default system prompts for voice auth are managed in const.py
     }
 )
 
@@ -266,5 +273,15 @@ class OptionsFlow(config_entries.OptionsFlow):
                 CONF_DOMAIN_KEYWORDS,
                 description={"suggested_value": options.get(CONF_DOMAIN_KEYWORDS)},
                 default=DEFAULT_DOMAIN_KEYWORDS,
+            ): TemplateSelector(),
+            vol.Optional(
+                CONF_VOICE_AUTH_ENABLED,
+                description={"suggested_value": options.get(CONF_VOICE_AUTH_ENABLED)},
+                default=DEFAULT_VOICE_AUTH_ENABLED,
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_VOICE_USERS,
+                description={"suggested_value": options.get(CONF_VOICE_USERS)},
+                default=yaml.dump(DEFAULT_VOICE_USERS),
             ): TemplateSelector(),
         }

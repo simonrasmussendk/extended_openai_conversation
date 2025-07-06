@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import timedelta
 from functools import partial
+import asyncio
 import logging
 import os
 import re
@@ -56,6 +57,7 @@ from .exceptions import (
     FunctionNotFound,
     InvalidFunction,
     NativeNotFound,
+    UnauthorizedAccess,
 )
 
 from homeassistant.components.recorder.db_schema import States, RecorderRuns, StateAttributes, StatisticsShortTerm
@@ -68,6 +70,147 @@ from homeassistant.components import rest, scrape, automation
 from homeassistant.helpers.template import Template
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def verify_voice_profile_permissions(user_input, domain=None, entity_id=None):
+    """Verify that the voice profile has permission to access the specified domain or entity.
+    
+    This provides an additional layer of security beyond the middleware checks.
+    
+    Args:
+        user_input: The conversation user input object
+        domain: The domain to check permissions for
+        entity_id: The entity_id to check permissions for
+        
+    Returns:
+        Tuple of (authorized: bool, profile_name: str)
+        
+    Raises:
+        UnauthorizedAccess: If access is not authorized
+    """
+    from .const import DEFAULT_VOICE_USERS
+    
+    # Extract speech metadata from different possible sources
+    profile_name = "default"  # Default to default profile instead of unknown
+    speech_metadata = {}
+    
+    # First try to get metadata from the user_input object
+    if hasattr(user_input, "metadata") and user_input.metadata:
+        # Direct metadata from conversation input
+        speech_metadata = user_input.metadata.get("speech_metadata", {})
+    
+    # If no metadata found, try to see if user_input itself is the metadata
+    # This handles cases where the function is called with the metadata dictionary directly
+    if not speech_metadata and isinstance(user_input, dict) and "speech_metadata" in user_input:
+        speech_metadata = user_input.get("speech_metadata", {})
+    elif not speech_metadata and isinstance(user_input, dict) and "profile_name" in user_input:
+        # The input might be the speech_metadata itself
+        speech_metadata = user_input
+    
+    # If we still don't have metadata, check for user_input.current_auth_metadata
+    if not speech_metadata and hasattr(user_input, "current_auth_metadata"):
+        speech_metadata = user_input.current_auth_metadata
+    
+    # Log if we didn't find any metadata and default to default profile
+    if not speech_metadata:
+        _LOGGER.info(f"No speech metadata found, defaulting to 'default' profile permissions")
+        default_profile = DEFAULT_VOICE_USERS.get("default", {})
+        return check_permissions_for_profile("default", default_profile, domain, entity_id)
+    
+    # Get voice profile information from metadata
+    profile_name = speech_metadata.get("profile_name", "default")
+    authenticated = speech_metadata.get("authenticated", False)
+    user_profile = speech_metadata.get("user_profile", {})
+    
+    # If critical data is missing, use default profile
+    if not user_profile:
+        _LOGGER.info(f"Missing user profile for '{profile_name}', using default profile")
+        default_profile = DEFAULT_VOICE_USERS.get("default", {})
+        return check_permissions_for_profile("default", default_profile, domain, entity_id)
+    
+    # For non-default profiles with low confidence, fall back to default profile
+    if profile_name != "default" and not authenticated:
+        _LOGGER.info(f"Profile '{profile_name}' not authenticated, checking default profile permissions")
+        default_profile = DEFAULT_VOICE_USERS.get("default", {})
+        authorized, _ = check_permissions_for_profile("default", default_profile, domain, entity_id)
+        
+        # If default profile allows access, grant it even for unauthenticated users
+        if authorized:
+            _LOGGER.info(f"Default profile allows access to {domain or entity_id}, granting access")
+            return (True, "default")
+    
+    # Check permissions using the actual profile
+    return check_permissions_for_profile(profile_name, user_profile, domain, entity_id)
+
+
+def check_permissions_for_profile(profile_name, user_profile, domain=None, entity_id=None):
+    """Check if the given user profile has permission for the specified domain or entity.
+    
+    Args:
+        profile_name: The name of the profile
+        user_profile: The user profile dictionary
+        domain: The domain to check permissions for
+        entity_id: The entity_id to check permissions for
+        
+    Returns:
+        Tuple of (authorized: bool, profile_name: str)
+    """
+    # Get permissions from the profile
+    permissions = user_profile.get("permissions", {})
+    allow = permissions.get("allow", {})
+    deny = permissions.get("deny", {})
+    
+    # Domain-specific authorization check
+    if domain:
+        # Check if domain is explicitly denied
+        denied_domains = deny.get("domains", [])
+        if domain in denied_domains:
+            _LOGGER.warning(f"Domain '{domain}' is explicitly denied for profile '{profile_name}'")
+            return (False, profile_name)
+            
+        # Check if domain is explicitly allowed ("*" means all domains)
+        allowed_domains = allow.get("domains", [])
+        if allowed_domains == "*" or (isinstance(allowed_domains, list) and domain in allowed_domains):
+            _LOGGER.info(f"Domain '{domain}' is allowed for profile '{profile_name}'")
+            return (True, profile_name)
+        else:
+            _LOGGER.warning(f"Domain '{domain}' is not in allowed domains for profile '{profile_name}'")
+            return (False, profile_name)
+    
+    # Entity-specific authorization check
+    if entity_id:
+        # Extract domain from entity_id
+        entity_domain = entity_id.split(".")[0] if "." in entity_id else ""
+        
+        # Check if entity is explicitly denied
+        denied_entities = deny.get("entities", [])
+        if entity_id in denied_entities:
+            _LOGGER.warning(f"Entity '{entity_id}' is explicitly denied for profile '{profile_name}'")
+            return (False, profile_name)
+            
+        # Check if entity's domain is explicitly denied
+        denied_domains = deny.get("domains", [])
+        if entity_domain and entity_domain in denied_domains:
+            _LOGGER.warning(f"Entity '{entity_id}' belongs to denied domain '{entity_domain}' for profile '{profile_name}'")
+            return (False, profile_name)
+            
+        # Check if entity is explicitly allowed
+        allowed_entities = allow.get("entities", [])
+        if entity_id in allowed_entities:
+            _LOGGER.info(f"Entity '{entity_id}' is explicitly allowed for profile '{profile_name}'")
+            return (True, profile_name)
+            
+        # Check if entity's domain is allowed
+        allowed_domains = allow.get("domains", [])
+        if allowed_domains == "*" or (isinstance(allowed_domains, list) and entity_domain in allowed_domains):
+            _LOGGER.info(f"Entity '{entity_id}' belongs to allowed domain '{entity_domain}' for profile '{profile_name}'")
+            return (True, profile_name)
+        else:
+            _LOGGER.warning(f"Entity '{entity_id}' domain '{entity_domain}' is not allowed for profile '{profile_name}'")
+            return (False, profile_name)
+    
+    # Default to denying access
+    return (False, profile_name)
 
 
 AZURE_DOMAIN_PATTERN = r"\.(openai\.azure\.com|azure-api\.net)"
@@ -353,7 +496,63 @@ class NativeFunctionExecutor(FunctionExecutor):
         if not hass.services.has_service(domain, service):
             raise ServiceNotFound(domain, service)
         self.validate_entity_ids(hass, entity_id or [], exposed_entities)
-
+        
+        # Additional security check based on voice profile authorization
+        # This provides defense-in-depth beyond the middleware
+        is_authorized = True
+        profile_name = "default"
+        
+        # Extract or create metadata for verification if none exists
+        metadata_for_verification = None
+        
+        # Check if we have a direct metadata object from the agent
+        if hasattr(user_input, "metadata") and user_input.metadata and "speech_metadata" in user_input.metadata:
+            # Use from conversation input
+            metadata_for_verification = user_input
+            _LOGGER.debug(f"Using metadata from conversation input for authorization check")
+        elif hasattr(user_input, "current_auth_metadata"):
+            # This might be an OpenAI agent with auth metadata
+            metadata_for_verification = {"speech_metadata": user_input.current_auth_metadata}
+            _LOGGER.debug(f"Using current_auth_metadata from agent for authorization check")
+        else:
+            # Try to find auth agent from local data
+            from inspect import currentframe, getouterframes
+            caller_frame = getouterframes(currentframe(), 2)
+            caller_self = None
+            
+            # Try to get the agent instance from the caller frame
+            for frame in caller_frame:
+                if 'self' in frame.frame.f_locals and hasattr(frame.frame.f_locals['self'], 'current_auth_metadata'):
+                    caller_self = frame.frame.f_locals['self']
+                    _LOGGER.debug(f"Found agent in caller frame with auth metadata")
+                    break
+                    
+            # Use metadata from the agent if found
+            if caller_self and hasattr(caller_self, 'current_auth_metadata'):
+                metadata_for_verification = {"speech_metadata": caller_self.current_auth_metadata}
+                _LOGGER.debug(f"Using metadata from caller agent: {caller_self.current_auth_metadata.get('profile_name', 'unknown')}")
+        
+        # First verify domain-level access
+        domain_authorized, profile_name = verify_voice_profile_permissions(
+            metadata_for_verification or user_input, domain=domain
+        )
+        
+        if not domain_authorized:
+            _LOGGER.warning(f"\ud83d\udd12 DOMAIN ACCESS DENIED: Profile '{profile_name}' not authorized for domain '{domain}'")
+            raise UnauthorizedAccess(profile_name, "domain", domain)
+        
+        # Then verify entity-level access for each entity if applicable
+        if entity_id:
+            for eid in entity_id:
+                entity_authorized, _ = verify_voice_profile_permissions(
+                    metadata_for_verification or user_input, entity_id=eid
+                )
+                if not entity_authorized:
+                    _LOGGER.warning(f"\ud83d\udd12 ENTITY ACCESS DENIED: Profile '{profile_name}' not authorized for entity '{eid}'")
+                    raise UnauthorizedAccess(profile_name, "entity", eid)
+        
+        _LOGGER.info(f"Authorization check passed for profile '{profile_name}', domain '{domain}'")
+        
         try:
             await hass.services.async_call(
                 domain=domain,
@@ -1476,10 +1675,25 @@ def log_openai_interaction(hass: HomeAssistant, request_data, response_data):
             os.makedirs(log_dir)
         
         # Create log entry with timestamp
+        # Sanitize data for JSON serialization
+        def sanitize_for_json(obj):
+            if obj is None or isinstance(obj, (str, int, float, bool)):
+                return obj
+            if isinstance(obj, list):
+                return [sanitize_for_json(item) for item in obj]
+            if isinstance(obj, dict):
+                return {k: sanitize_for_json(v) for k, v in obj.items() 
+                        if not asyncio.iscoroutine(v)}
+            if asyncio.iscoroutine(obj):
+                return "<coroutine>"
+            # For other types, convert to string
+            return str(obj)
+            
+        # Create sanitized log entry
         log_entry = {
-            "timestamp": dt_util.utcnow().isoformat(),
-            "request": request_data,
-            "response": response_data
+            "timestamp": dt_util.now().isoformat(),
+            "request": sanitize_for_json(request_data),
+            "response": sanitize_for_json(response_data)
         }
         
         # Make sure we can write to a file from the event loop

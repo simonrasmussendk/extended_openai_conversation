@@ -139,3 +139,21 @@ class InvalidFunction(HomeAssistantError):
     def __str__(self) -> str:
         """Return string representation."""
         return f"failed to validate function `{self.function_name}` ({self.__cause__})"
+
+
+class UnauthorizedAccess(HomeAssistantError):
+    """When user does not have sufficient permissions for the operation."""
+
+    def __init__(self, profile_name: str, resource_type: str, resource_id: str) -> None:
+        """Initialize error."""
+        super().__init__(
+            self,
+            f"Profile '{profile_name}' is not authorized to access {resource_type} '{resource_id}'",
+        )
+        self.profile_name = profile_name
+        self.resource_type = resource_type
+        self.resource_id = resource_id
+
+    def __str__(self) -> str:
+        """Return string representation."""
+        return f"Unauthorized: Profile '{self.profile_name}' doesn't have permission to access {self.resource_type} '{self.resource_id}'"

@@ -140,6 +140,38 @@ DEFAULT_CONTEXT_TRUNCATE_STRATEGY = CONTEXT_TRUNCATE_STRATEGIES[0]["key"]
 
 CONF_PAYLOAD_TEMPLATE = "payload_template"
 
+# Voice authentication configuration
+CONF_VOICE_AUTH_ENABLED = "voice_auth_enabled"
+DEFAULT_VOICE_AUTH_ENABLED = False
+
+# Voice authentication threshold margin (percentage below threshold to still consider a match)
+CONF_VOICE_AUTH_THRESHOLD_MARGIN = "voice_auth_threshold_margin"
+DEFAULT_VOICE_AUTH_THRESHOLD_MARGIN = 0.05  # 5% below threshold
+
+# Voice authentication cache expiration (seconds)
+CONF_VOICE_AUTH_CACHE_EXPIRATION = "voice_auth_cache_expiration"
+DEFAULT_VOICE_AUTH_CACHE_EXPIRATION = 60  # 1 minute in seconds
+
+# Voice user profiles configuration
+CONF_VOICE_USERS = "voice_users"
+DEFAULT_VOICE_USERS = {
+    "default": {
+        "user_id": "default",
+        "permissions": {
+            "allow": {
+                "domains": ["light"],
+                "entities": []
+            },
+            "deny": {
+                "domains": [],
+                "entities": []
+            }
+        }
+    }
+}
+
+# No auth levels needed as we use permissions directly
+
 # Domain keyword mapping configuration
 CONF_DOMAIN_KEYWORDS = "domain_keywords"
 DEFAULT_DOMAIN_KEYWORDS = """# Example format for domain keywords:

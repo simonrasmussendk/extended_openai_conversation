@@ -57,7 +57,8 @@ class ConversationStore:
                 self._store[conversation_id] = {
                     "messages": messages,
                     "last_accessed": time.time(),
-                    "sent_domains": set()
+                    "sent_domains": set(),
+                    "auth_data": None  # Initialize auth_data for new conversations
                 }
 
     def get_sent_domains(self, conversation_id: str) -> set:
@@ -125,6 +126,42 @@ class ConversationStore:
         with self._lock:
             return list(self._store.keys())
             
+    def get_auth_data(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Get voice authentication data for a specific conversation.
+        
+        Args:
+            conversation_id: The ID of the conversation to retrieve auth data for.
+            
+        Returns:
+            The authentication data if found, None otherwise.
+        """
+        with self._lock:
+            if conversation_id in self._store:
+                # Update last accessed time
+                self._store[conversation_id]["last_accessed"] = time.time()
+                return self._store[conversation_id].get("auth_data")
+            return None
+            
+    def save_auth_data(self, conversation_id: str, auth_data: Dict[str, Any]) -> None:
+        """Save or update voice authentication data for a conversation.
+        
+        Args:
+            conversation_id: The ID of the conversation to save auth data for.
+            auth_data: The authentication data to store.
+        """
+        with self._lock:
+            if conversation_id in self._store:
+                self._store[conversation_id]["auth_data"] = auth_data
+                self._store[conversation_id]["last_accessed"] = time.time()
+            else:
+                # Create a new conversation entry if it doesn't exist
+                self._store[conversation_id] = {
+                    "messages": [],
+                    "last_accessed": time.time(),
+                    "sent_domains": set(),
+                    "auth_data": auth_data
+                }
+    
     def clear_all(self) -> None:
         """Clear all stored conversations."""
         with self._lock:
