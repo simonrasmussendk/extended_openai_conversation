@@ -21,7 +21,6 @@
         "step": {
             "init": {
                 "title": "Opzioni Extended OpenAI Conversation",
-                "description": "Abilita OpenAI Speech‑to‑Text. Lascia i campi opzionali vuoti per riutilizzare le impostazioni API principali. Per Azure OpenAI imposta la STT Base URL al tuo endpoint Azure (es. https://your-resource.openai.azure.com), la STT API Version (es. 2024-06-01) e usa il nome del tuo deployment come modello STT.",
                 "data": {
                     "max_tokens": "Numero massimo token da restituire nella risposta",
                     "model": "Modello di completamento",

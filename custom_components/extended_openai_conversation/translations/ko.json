@@ -22,7 +22,6 @@
         "step": {
             "init": {
                 "title": "Extended OpenAI Conversation 옵션",
-                "description": "OpenAI 음성 → 텍스트(STT)를 활성화합니다. 선택 항목을 비워두면 통합의 기본 API 설정을 재사용합니다. Azure OpenAI의 경우 STT 기본 URL을 Azure 엔드포인트(예: https://your-resource.openai.azure.com)로, STT API 버전(예: 2024-06-01)과 배포 이름을 STT 모델로 설정하세요.",
                 "data": {
                     "max_tokens": "Maximum tokens to return in response",
                     "model": "Completion Model",

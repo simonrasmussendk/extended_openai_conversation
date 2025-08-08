@@ -22,7 +22,6 @@
         "step": {
             "init": {
                 "title": "Opcje Extended OpenAI Conversation",
-                "description": "Włącz OpenAI Speech‑to‑Text. Pola opcjonalne pozostaw puste, aby użyć głównych ustawień API z integracji. Dla Azure OpenAI ustaw STT Base URL na swój punkt końcowy Azure (np. https://your-resource.openai.azure.com), STT API Version (np. 2024-06-01) oraz użyj nazwy wdrożenia jako modelu STT.",
                 "data": {
                     "max_tokens": "Maksymalna ilość tokenów w odpowiedzi",
                     "model": "Model",

@@ -22,7 +22,6 @@
         "step": {
             "init": {
                 "title": "Extended OpenAI Conversation beállítások",
-                "description": "OpenAI Speech-to-Text engedélyezése. Az opcionális mezőket hagyja üresen a fő API-beállítások örökléséhez. Azure OpenAI esetén állítsa a STT alap URL-t az Azure végpontra (pl. https://your-resource.openai.azure.com), az STT API verziót (pl. 2024-06-01), és a telepítés nevét használja STT modellként.",
                 "data": {
                     "max_tokens": "A válaszként viszaküldhető maximum tokenek száma",
                     "model": "Model",

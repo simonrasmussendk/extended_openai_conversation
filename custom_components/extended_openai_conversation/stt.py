@@ -39,6 +39,7 @@ from .const import (
     CONF_STT_LANGUAGE,
     CONF_STT_MODEL,
     CONF_STT_ORGANIZATION,
+    DEFAULT_NAME,
     DEFAULT_STT_LANGUAGE,
     DEFAULT_STT_MODEL,
     DOMAIN,
@@ -60,7 +61,7 @@ async def async_setup_entry(
         return True
 
     provider = ExtendedOpenAISttProvider(hass, entry)
-    async_add_entities([ExtendedOpenAISttEntity(hass, provider, entry.entry_id)])
+    async_add_entities([ExtendedOpenAISttEntity(hass, provider, entry)])
     _LOGGER.info("Extended OpenAI STT entity added for entry %s", entry.entry_id)
     return True
 
@@ -68,12 +69,14 @@ async def async_setup_entry(
 class ExtendedOpenAISttEntity(SpeechToTextEntity):
     """Speech-to-Text entity for Extended OpenAI Conversation."""
 
-    def __init__(self, hass: HomeAssistant, provider: Provider, entry_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, provider: Provider, entry: ConfigEntry) -> None:
         super().__init__()
         self.hass = hass
         self._provider = provider
-        self._attr_unique_id = f"{entry_id}_stt"
-        self._attr_name = "Extended OpenAI STT"
+        self._attr_unique_id = f"{entry.entry_id}_stt"
+        # Use the config entry title to make the STT entity name specific per service/entry
+        entry_title = getattr(entry, "title", None) or DEFAULT_NAME
+        self._attr_name = f"{entry_title} STT"
 
     @property
     def provider(self) -> Provider:

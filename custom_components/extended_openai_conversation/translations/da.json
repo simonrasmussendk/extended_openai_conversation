@@ -22,7 +22,6 @@
     "step": {
       "init": {
         "title": "Udvidede OpenAI-indstillinger",
-        "description": "Aktiver OpenAI tale-til-tekst. Lad valgfrie felter være tomme for at genbruge API-indstillingerne fra integrationen. For Azure OpenAI: angiv STT Base URL, STT API Version (f.eks. 2024-06-01) og brug dit deploymentsnavn som STT Model.",
         "data": {
           "max_tokens": "Maksimalt antal tokens i svar",
           "model": "Completions-model",
