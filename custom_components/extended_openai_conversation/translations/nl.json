@@ -21,6 +21,8 @@
     "options": {
         "step": {
             "init": {
+                "title": "Extended OpenAI Conversation Opties",
+                "description": "OpenAI Spraak-naar-Tekst inschakelen. Laat optionele velden leeg om de hoofd-API-instellingen van de integratie te hergebruiken. Voor Azure OpenAI stel je STT Basis-URL in op je Azure-eindpunt (bijv. https://your-resource.openai.azure.com), de STT API-versie (bijv. 2024-06-01) en gebruik je je deploymentnaam als STT-model.",
                 "data": {
                     "max_tokens": "Maximale aantal tokens dat mag worden gegenereerd",
                     "model": "Completion Model",
@@ -33,7 +35,23 @@
                     "use_tools": "Use Tools",
                     "context_threshold": "Context Threshold",
                     "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
-                    "domain_keywords": "Domain Keywords"
+                    "domain_keywords": "Domain Keywords",
+                    "enable_stt": "OpenAI Speech To Text inschakelen",
+                    "stt_api_key": "STT API-sleutel (optioneel)",
+                    "stt_base_url": "STT Basis-URL (optioneel)",
+                    "stt_api_version": "STT API-versie (optioneel)",
+                    "stt_organization": "STT Organisatie (optioneel)",
+                    "stt_model": "STT Model (verplicht)",
+                    "stt_language": "STT Taal (verplicht)"
+                },
+                "data_description": {
+                    "enable_stt": "Zet aan om transcriptie in de Assist-pijplijn te gebruiken.",
+                    "stt_api_key": "Optioneel. Overschrijft de API-sleutel van de integratie voor STT-aanroepen.",
+                    "stt_base_url": "Optioneel. Voor Azure OpenAI gebruik https://your-resource.openai.azure.com.",
+                    "stt_api_version": "Optioneel. Azure API-versie, bijv. 2024-06-01.",
+                    "stt_organization": "Optioneel. Alleen voor oudere OpenAI-organisatiesleutels.",
+                    "stt_model": "Standaard is whisper-1. Voor Azure OpenAI gebruik je je deploymentnaam.",
+                    "stt_language": "Verplicht. Taal-locale, bijv. nl-NL."
                 }
             }
         }

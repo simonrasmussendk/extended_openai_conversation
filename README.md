@@ -108,6 +108,39 @@ You can customize the integration's behavior through the Options section. Click 
 
 - `Functions`: A list of mappings between function specifications and implementations
 
+### Speech-to-Text (STT)
+
+This integration includes a built‑in OpenAI Speech‑to‑Text provider that plugs into Home Assistant’s Assist pipeline.
+
+How to enable
+- Go to Settings → Voice Assistants → Edit your Assistant → Options.
+- Toggle “Enable OpenAI Speech To Text”.
+
+Fields
+- STT API Key (optional): Overrides the main integration API key for STT calls.
+- STT Base URL (optional): For Azure OpenAI, set to your endpoint, e.g. https://your-resource.openai.azure.com
+- STT API Version (optional): Azure API version, e.g. 2024-06-01
+- STT Organization (optional): Only for legacy OpenAI org keys
+- STT Model (required): Default is whisper-1. For Azure OpenAI, set this to your deployment name
+- STT Language (required): Language locale, e.g. en-US
+
+Notes
+- Audio: expects 16‑bit PCM, mono, 16 kHz. If raw PCM is provided, it is automatically wrapped as a valid WAV file before sending to the API.
+- Endpoints: Works with both OpenAI and Azure OpenAI endpoints. Leave Base URL empty for OpenAI; fill Base URL and API Version for Azure.
+- Inheritance: If optional STT fields are left empty, the integration reuses your main API settings.
+- Translations/UI text updates may require a Home Assistant Core restart and a hard browser refresh after updating the integration.
+
+Example configurations
+- OpenAI (default):
+  - Base URL: leave empty
+  - Model: whisper-1
+  - Language: en-US (or your locale)
+- Azure OpenAI:
+  - Base URL: https://your-resource.openai.azure.com
+  - API Version: 2024-06-01 (or your chosen version)
+  - Model: your deployment name (e.g. whisper-1 or custom)
+  - Language: en-US (or your locale)
+
 ### Supported Function Types
 
 - `native`: Built-in functions provided by the integration:

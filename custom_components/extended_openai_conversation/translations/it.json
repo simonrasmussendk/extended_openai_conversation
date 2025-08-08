@@ -20,6 +20,8 @@
     "options": {
         "step": {
             "init": {
+                "title": "Opzioni Extended OpenAI Conversation",
+                "description": "Abilita OpenAI Speech‑to‑Text. Lascia i campi opzionali vuoti per riutilizzare le impostazioni API principali. Per Azure OpenAI imposta la STT Base URL al tuo endpoint Azure (es. https://your-resource.openai.azure.com), la STT API Version (es. 2024-06-01) e usa il nome del tuo deployment come modello STT.",
                 "data": {
                     "max_tokens": "Numero massimo token da restituire nella risposta",
                     "model": "Modello di completamento",
@@ -32,7 +34,23 @@
                     "use_tools": "Utilizza strumenti",
                     "context_threshold": "Soglia di contesto",
                     "context_truncate_strategy": "Strategia di troncamento del contesto quando superata la soglia",
-                    "domain_keywords": "Parole chiave per domini"
+                    "domain_keywords": "Parole chiave per domini",
+                    "enable_stt": "Abilita OpenAI Speech To Text",
+                    "stt_api_key": "Chiave API STT (opzionale)",
+                    "stt_base_url": "URL di base STT (opzionale)",
+                    "stt_api_version": "Versione API STT (opzionale)",
+                    "stt_organization": "Organizzazione STT (opzionale)",
+                    "stt_model": "Modello STT (obbligatorio)",
+                    "stt_language": "Lingua STT (obbligatoria)"
+                },
+                "data_description": {
+                    "enable_stt": "Attiva la trascrizione nella pipeline Assist.",
+                    "stt_api_key": "Opzionale. Sostituisce la chiave API dell'integrazione per le chiamate STT.",
+                    "stt_base_url": "Opzionale. Per Azure OpenAI usa https://your-resource.openai.azure.com.",
+                    "stt_api_version": "Opzionale. Versione API di Azure, es. 2024-06-01.",
+                    "stt_organization": "Opzionale. Solo per vecchie chiavi organizzazione OpenAI.",
+                    "stt_model": "Predefinito whisper-1. Per Azure OpenAI usa il nome del tuo deployment.",
+                    "stt_language": "Obbligatoria. Locale della lingua, es. it-IT."
                 }
             }
         }

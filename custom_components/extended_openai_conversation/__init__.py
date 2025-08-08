@@ -9,8 +9,7 @@ from typing import Any, Literal
 import voluptuous as vol
 import yaml
 
-from openai import AsyncAzureOpenAI, AsyncOpenAI
-from openai._exceptions import AuthenticationError, OpenAIError
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AuthenticationError, OpenAIError
 from openai.types.chat.chat_completion import (
     ChatCompletion,
     ChatCompletionMessage,
@@ -51,6 +50,7 @@ from .const import (
     CONF_FUNCTIONS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     CONF_MAX_TOKENS,
+    CONF_ENABLE_STT,
     CONF_ORGANIZATION,
     CONF_PROMPT,
     CONF_SKIP_AUTHENTICATION,
@@ -114,6 +114,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update by reloading the entry."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up OpenAI Conversation from a config entry."""
 
@@ -146,13 +151,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
     data[CONF_API_KEY] = entry.data[CONF_API_KEY]
     data[DATA_AGENT] = agent
+    # Track whether we actually forwarded the STT platform for this entry
+    data.setdefault("stt_loaded", False)
 
     conversation.async_set_agent(hass, entry, agent)
+
+    # Listen for options updates to toggle STT without restart
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
+    # Forward STT platform setup if enabled in options
+    try:
+        if entry.options.get(CONF_ENABLE_STT):
+            await hass.config_entries.async_forward_entry_setups(entry, ["stt"])
+            data["stt_loaded"] = True
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Failed to set up STT platform: %s", err)
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload OpenAI."""
+    # Unload STT platform only if we had set it up for this entry
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    try:
+        if entry_data.get("stt_loaded"):
+            await hass.config_entries.async_unload_platforms(entry, ["stt"])
+            entry_data["stt_loaded"] = False
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Failed to unload STT platform cleanly: %s", err)
+
     hass.data[DOMAIN].pop(entry.entry_id)
     conversation.async_unset_agent(hass, entry)
     return True

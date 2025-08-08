@@ -21,6 +21,8 @@
     "options": {
         "step": {
             "init": {
+                "title": "Opcje Extended OpenAI Conversation",
+                "description": "Włącz OpenAI Speech‑to‑Text. Pola opcjonalne pozostaw puste, aby użyć głównych ustawień API z integracji. Dla Azure OpenAI ustaw STT Base URL na swój punkt końcowy Azure (np. https://your-resource.openai.azure.com), STT API Version (np. 2024-06-01) oraz użyj nazwy wdrożenia jako modelu STT.",
                 "data": {
                     "max_tokens": "Maksymalna ilość tokenów w odpowiedzi",
                     "model": "Model",
@@ -33,7 +35,23 @@
                     "use_tools": "Use Tools",
                     "context_threshold": "Context Threshold",
                     "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
-                    "domain_keywords": "Domain Keywords"
+                    "domain_keywords": "Domain Keywords",
+                    "enable_stt": "Włącz OpenAI Speech To Text",
+                    "stt_api_key": "Klucz API STT (opcjonalnie)",
+                    "stt_base_url": "Bazowy URL STT (opcjonalnie)",
+                    "stt_api_version": "Wersja API STT (opcjonalnie)",
+                    "stt_organization": "Organizacja STT (opcjonalnie)",
+                    "stt_model": "Model STT (wymagany)",
+                    "stt_language": "Język STT (wymagany)"
+                },
+                "data_description": {
+                    "enable_stt": "Włącz, aby używać transkrypcji w potoku Assist.",
+                    "stt_api_key": "Opcjonalnie. Nadpisuje klucz API integracji dla wywołań STT.",
+                    "stt_base_url": "Opcjonalnie. Dla Azure OpenAI użyj https://your-resource.openai.azure.com.",
+                    "stt_api_version": "Opcjonalnie. Wersja Azure API, np. 2024-06-01.",
+                    "stt_organization": "Opcjonalnie. Tylko dla starszych kluczy organizacyjnych OpenAI.",
+                    "stt_model": "Domyślnie whisper-1. W Azure OpenAI użyj nazwy wdrożenia.",
+                    "stt_language": "Wymagane. Locale języka, np. pl-PL."
                 }
             }
         }

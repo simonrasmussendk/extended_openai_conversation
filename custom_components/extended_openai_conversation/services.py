@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from openai import AsyncOpenAI
-from openai._exceptions import OpenAIError
+from openai import OpenAIError
 from openai.types.chat.chat_completion_content_part_image_param import (
     ChatCompletionContentPartImageParam,
 )

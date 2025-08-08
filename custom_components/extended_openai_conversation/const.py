@@ -154,3 +154,19 @@ DEFAULT_DOMAIN_KEYWORDS = """# Example format for domain keywords:
     - thermostat
     - heat
 """
+
+# Service types
+CONF_SERVICE_TYPE = "service_type"
+SERVICE_TYPE_CONVERSATION = "conversation"
+SERVICE_TYPE_STT = "stt"
+
+# STT configuration
+CONF_ENABLE_STT = "enable_stt"
+CONF_STT_API_KEY = "stt_api_key"
+CONF_STT_BASE_URL = "stt_base_url"
+CONF_STT_API_VERSION = "stt_api_version"
+CONF_STT_ORGANIZATION = "stt_organization"
+CONF_STT_MODEL = "stt_model"
+DEFAULT_STT_MODEL = "whisper-1"
+CONF_STT_LANGUAGE = "stt_language"
+DEFAULT_STT_LANGUAGE = "en-US"

@@ -21,6 +21,8 @@
     "options": {
         "step": {
             "init": {
+                "title": "Opções do Extended OpenAI Conversation",
+                "description": "Ative o OpenAI Speech‑to‑Text. Deixe os campos opcionais em branco para herdar as configurações principais da API da integração. Para Azure OpenAI, defina o STT Base URL para o seu endpoint do Azure (ex.: https://your-resource.openai.azure.com), o STT API Version (ex.: 2024-06-01) e use o nome da implantação como modelo STT.",
                 "data": {
                     "max_tokens": "Número máximo de tokens da resposta",
                     "model": "Modelo da Conclusão",
@@ -33,7 +35,23 @@
                     "use_tools": "Use ferramentas",
                     "context_threshold": "Limite do contexto",
                     "context_truncate_strategy": "Estratégia de truncamento de contexto quando o limite é excedido",
-                    "domain_keywords": "Palavras-chave para domínios"
+                    "domain_keywords": "Palavras-chave para domínios",
+                    "enable_stt": "Ativar OpenAI Speech To Text",
+                    "stt_api_key": "Chave API STT (opcional)",
+                    "stt_base_url": "URL base STT (opcional)",
+                    "stt_api_version": "Versão da API STT (opcional)",
+                    "stt_organization": "Organização STT (opcional)",
+                    "stt_model": "Modelo STT (obrigatório)",
+                    "stt_language": "Idioma STT (obrigatório)"
+                },
+                "data_description": {
+                    "enable_stt": "Ative para usar transcrição no pipeline do Assist.",
+                    "stt_api_key": "Opcional. Substitui a chave API da integração para chamadas STT.",
+                    "stt_base_url": "Opcional. Para Azure OpenAI use https://your-resource.openai.azure.com.",
+                    "stt_api_version": "Opcional. Versão da API do Azure, ex.: 2024-06-01.",
+                    "stt_organization": "Opcional. Apenas para chaves de organização legadas do OpenAI.",
+                    "stt_model": "Padrão é whisper-1. Para Azure OpenAI utilize o nome da implantação.",
+                    "stt_language": "Obrigatório. Locale do idioma, ex.: pt-BR."
                 }
             }
         }

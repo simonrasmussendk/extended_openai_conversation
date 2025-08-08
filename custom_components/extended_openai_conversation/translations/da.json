@@ -1,0 +1,91 @@
+{
+  "config": {
+    "error": {
+      "cannot_connect": "Kunne ikke oprette forbindelse",
+      "invalid_auth": "Ugyldig godkendelse",
+      "unknown": "Uventet fejl"
+    },
+    "step": {
+      "user": {
+        "data": {
+          "name": "Navn",
+          "api_key": "API-nøgle",
+          "base_url": "Base URL",
+          "api_version": "API-version",
+          "organization": "Organisation",
+          "skip_authentication": "Spring godkendelse over"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Udvidede OpenAI-indstillinger",
+        "description": "Aktiver OpenAI tale-til-tekst. Lad valgfrie felter være tomme for at genbruge API-indstillingerne fra integrationen. For Azure OpenAI: angiv STT Base URL, STT API Version (f.eks. 2024-06-01) og brug dit deploymentsnavn som STT Model.",
+        "data": {
+          "max_tokens": "Maksimalt antal tokens i svar",
+          "model": "Completions-model",
+          "prompt": "Promptskabelon",
+          "temperature": "Temperature",
+          "top_p": "Top P",
+          "max_function_calls_per_conversation": "Maks. funktionskald pr. samtale",
+          "functions": "Funktioner",
+          "attach_username": "Vedhæft brugernavn til besked",
+          "use_tools": "Brug værktøjer",
+          "context_threshold": "Kontekstgrænse",
+          "context_truncate_strategy": "Strategi når kontekstgrænse overskrides",
+          "domain_keywords": "Domænenøgleord til automatisk at tilføje entitetsattributter, når nøgleord genkendes",
+          "enable_stt": "Aktivér OpenAI tale-til-tekst",
+          "stt_api_key": "STT API-nøgle (valgfri)",
+          "stt_base_url": "STT Base URL (valgfri)",
+          "stt_api_version": "STT API-version (valgfri)",
+          "stt_organization": "STT organisation (valgfri)",
+          "stt_model": "STT-model (påkrævet)",
+          "stt_language": "STT-sprog (påkrævet)"
+        },
+        "data_description": {
+          "enable_stt": "Aktivér for at bruge transskription i Assist-pipelinen.",
+          "stt_api_key": "Valgfri. Tilsidesætter integrationens API-nøgle for STT-kald.",
+          "stt_base_url": "Valgfri. For Azure OpenAI brug https://dit-resource.openai.azure.com.",
+          "stt_api_version": "Valgfri. Azure API-version, f.eks. 2024-06-01.",
+          "stt_organization": "Valgfri. Kun for ældre OpenAI-org-nøgler.",
+          "stt_model": "Standard er whisper-1. For Azure OpenAI angiv dit deploymentsnavn.",
+          "stt_language": "Påkrævet. Sprogkode, f.eks. en-US."
+        }
+      }
+    }
+  },
+  "services": {
+    "query_image": {
+      "name": "Forespørg billede",
+      "description": "Tag imod billeder og besvar spørgsmål om dem",
+      "fields": {
+        "config_entry": {
+          "name": "Konfigurationspunkt",
+          "description": "Det konfigurationspunkt, der skal bruges til denne tjeneste"
+        },
+        "model": {
+          "name": "Model",
+          "description": "Modellen",
+          "example": "gpt-4-vision-preview"
+        },
+        "prompt": {
+          "name": "Prompt",
+          "description": "Teksten til at spørge om billedet",
+          "example": "Hvad er der på billedet?"
+        },
+        "images": {
+          "name": "Billeder",
+          "description": "En liste over billeder der skal spørges om",
+          "example": "{\"url\": \"https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg\"}"
+        },
+        "max_tokens": {
+          "name": "Maks. tokens",
+          "description": "Det maksimale antal tokens",
+          "example": "300"
+        }
+      }
+    }
+  }
+}

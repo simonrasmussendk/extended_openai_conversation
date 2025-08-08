@@ -21,6 +21,8 @@
     "options": {
         "step": {
             "init": {
+                "title": "Extended OpenAI Conversation 옵션",
+                "description": "OpenAI 음성 → 텍스트(STT)를 활성화합니다. 선택 항목을 비워두면 통합의 기본 API 설정을 재사용합니다. Azure OpenAI의 경우 STT 기본 URL을 Azure 엔드포인트(예: https://your-resource.openai.azure.com)로, STT API 버전(예: 2024-06-01)과 배포 이름을 STT 모델로 설정하세요.",
                 "data": {
                     "max_tokens": "Maximum tokens to return in response",
                     "model": "Completion Model",
@@ -33,7 +35,23 @@
                     "use_tools": "Use Tools",
                     "context_threshold": "Context Threshold",
                     "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
-                    "domain_keywords": "Domain Keywords"
+                    "domain_keywords": "Domain Keywords",
+                    "enable_stt": "OpenAI Speech To Text 사용",
+                    "stt_api_key": "STT API Key (선택)",
+                    "stt_base_url": "STT 기본 URL (선택)",
+                    "stt_api_version": "STT API 버전 (선택)",
+                    "stt_organization": "STT 조직 (선택)",
+                    "stt_model": "STT 모델 (필수)",
+                    "stt_language": "STT 언어 (필수)"
+                },
+                "data_description": {
+                    "enable_stt": "Assist 파이프라인에서 음성 인식을 사용하려면 켜세요.",
+                    "stt_api_key": "선택 사항. STT 호출에 대해 통합의 API 키를 재정의합니다.",
+                    "stt_base_url": "선택 사항. Azure OpenAI의 경우 https://your-resource.openai.azure.com 사용.",
+                    "stt_api_version": "선택 사항. Azure API 버전, 예: 2024-06-01.",
+                    "stt_organization": "선택 사항. 레거시 OpenAI 조직 키만 해당.",
+                    "stt_model": "기본값은 whisper-1. Azure OpenAI는 배포 이름을 사용하세요.",
+                    "stt_language": "필수. 언어 로케일, 예: ko-KR."
                 }
             }
         }

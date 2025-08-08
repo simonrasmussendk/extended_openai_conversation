@@ -6,7 +6,7 @@ import types
 from types import MappingProxyType
 from typing import Any
 
-from openai._exceptions import APIConnectionError, AuthenticationError
+from openai import APIConnectionError, AuthenticationError
 import voluptuous as vol
 import yaml
 
@@ -32,12 +32,21 @@ from .const import (
     CONF_CHAT_MODEL,
     CONF_CONTEXT_THRESHOLD,
     CONF_CONTEXT_TRUNCATE_STRATEGY,
+    CONF_CONVERSATION_EXPIRATION_TIME,
+    CONF_DOMAIN_KEYWORDS,
+    CONF_ENABLE_STT,
     CONF_FUNCTIONS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     CONF_MAX_TOKENS,
     CONF_ORGANIZATION,
     CONF_PROMPT,
     CONF_SKIP_AUTHENTICATION,
+    CONF_STT_API_KEY,
+    CONF_STT_API_VERSION,
+    CONF_STT_BASE_URL,
+    CONF_STT_LANGUAGE,
+    CONF_STT_MODEL,
+    CONF_STT_ORGANIZATION,
     CONF_TEMPERATURE,
     CONF_TOP_P,
     CONF_USE_TOOLS,
@@ -48,17 +57,19 @@ from .const import (
     DEFAULT_CONF_FUNCTIONS,
     DEFAULT_CONTEXT_THRESHOLD,
     DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+    DEFAULT_CONVERSATION_EXPIRATION_TIME,
+    DEFAULT_DOMAIN_KEYWORDS,
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_TOKENS,
     DEFAULT_NAME,
     DEFAULT_PROMPT,
     DEFAULT_SKIP_AUTHENTICATION,
+    DEFAULT_STT_LANGUAGE,
+    DEFAULT_STT_MODEL,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     DEFAULT_USE_TOOLS,
     DOMAIN,
-    CONF_DOMAIN_KEYWORDS,
-    DEFAULT_DOMAIN_KEYWORDS,
 )
 from .helpers import validate_authentication
 
@@ -93,6 +104,13 @@ DEFAULT_OPTIONS = types.MappingProxyType(
         CONF_CONTEXT_THRESHOLD: DEFAULT_CONTEXT_THRESHOLD,
         CONF_CONTEXT_TRUNCATE_STRATEGY: DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
         CONF_DOMAIN_KEYWORDS: DEFAULT_DOMAIN_KEYWORDS,
+        CONF_ENABLE_STT: False,
+        CONF_STT_API_KEY: "",
+        CONF_STT_BASE_URL: "",
+        CONF_STT_API_VERSION: "",
+        CONF_STT_ORGANIZATION: "",
+        CONF_STT_MODEL: DEFAULT_STT_MODEL,
+        CONF_STT_LANGUAGE: DEFAULT_STT_LANGUAGE,
     }
 )
 
@@ -186,7 +204,7 @@ class OptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(schema),
         )
 
-    def openai_config_option_schema(self, options: MappingProxyType[str, Any]) -> dict:
+    def openai_config_option_schema(self, options: dict[str, Any]) -> dict:
         """Return a schema for OpenAI completion options."""
         if not options:
             options = DEFAULT_OPTIONS
@@ -267,4 +285,40 @@ class OptionsFlow(config_entries.OptionsFlow):
                 description={"suggested_value": options.get(CONF_DOMAIN_KEYWORDS)},
                 default=DEFAULT_DOMAIN_KEYWORDS,
             ): TemplateSelector(),
+            # STT options
+            vol.Optional(
+                CONF_ENABLE_STT,
+                description={"suggested_value": options.get(CONF_ENABLE_STT, False)},
+                default=False,
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_STT_API_KEY,
+                description={"suggested_value": options.get(CONF_STT_API_KEY, "")},
+                default="",
+            ): str,
+            vol.Optional(
+                CONF_STT_BASE_URL,
+                description={"suggested_value": options.get(CONF_STT_BASE_URL, "")},
+                default="",
+            ): str,
+            vol.Optional(
+                CONF_STT_API_VERSION,
+                description={"suggested_value": options.get(CONF_STT_API_VERSION, "")},
+                default="",
+            ): str,
+            vol.Optional(
+                CONF_STT_ORGANIZATION,
+                description={"suggested_value": options.get(CONF_STT_ORGANIZATION, "")},
+                default="",
+            ): str,
+            vol.Required(
+                CONF_STT_MODEL,
+                description={"suggested_value": options.get(CONF_STT_MODEL, DEFAULT_STT_MODEL)},
+                default=DEFAULT_STT_MODEL,
+            ): str,
+            vol.Required(
+                CONF_STT_LANGUAGE,
+                description={"suggested_value": options.get(CONF_STT_LANGUAGE, DEFAULT_STT_LANGUAGE)},
+                default=DEFAULT_STT_LANGUAGE,
+            ): str,
         }

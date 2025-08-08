@@ -21,6 +21,8 @@
     "options": {
         "step": {
             "init": {
+                "title": "Extended OpenAI Conversation beállítások",
+                "description": "OpenAI Speech-to-Text engedélyezése. Az opcionális mezőket hagyja üresen a fő API-beállítások örökléséhez. Azure OpenAI esetén állítsa a STT alap URL-t az Azure végpontra (pl. https://your-resource.openai.azure.com), az STT API verziót (pl. 2024-06-01), és a telepítés nevét használja STT modellként.",
                 "data": {
                     "max_tokens": "A válaszként viszaküldhető maximum tokenek száma",
                     "model": "Model",
@@ -33,7 +35,23 @@
                     "use_tools": "Use Tools",
                     "context_threshold": "Context Threshold",
                     "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
-                    "domain_keywords": "Domain Keywords"
+                    "domain_keywords": "Domain Keywords",
+                    "enable_stt": "OpenAI Speech To Text engedélyezése",
+                    "stt_api_key": "STT API-kulcs (opcionális)",
+                    "stt_base_url": "STT alap URL (opcionális)",
+                    "stt_api_version": "STT API verzió (opcionális)",
+                    "stt_organization": "STT Szervezet (opcionális)",
+                    "stt_model": "STT modell (kötelező)",
+                    "stt_language": "STT nyelv (kötelező)"
+                },
+                "data_description": {
+                    "enable_stt": "Kapcsolja be a transzkripciót az Assist folyamatban.",
+                    "stt_api_key": "Opcionális. Felülírja az integráció API-kulcsát az STT hívásokhoz.",
+                    "stt_base_url": "Opcionális. Azure OpenAI esetén használja: https://your-resource.openai.azure.com.",
+                    "stt_api_version": "Opcionális. Azure API verzió, pl. 2024-06-01.",
+                    "stt_organization": "Opcionális. Csak régi OpenAI szervezeti kulcsokhoz.",
+                    "stt_model": "Alapértelmezett a whisper-1. Azure OpenAI esetén adja meg a telepítés nevét.",
+                    "stt_language": "Kötelező. Nyelvi területi kód, pl. hu-HU."
                 }
             }
         }
