@@ -20,6 +20,12 @@
   },
   "options": {
     "step": {
+      "preset": {
+        "title": "Vælg model-forudindstilling",
+        "data": {
+          "model": "Model-forudindstilling"
+        }
+      },
       "init": {
         "title": "Udvidede OpenAI-indstillinger",
         "data": {

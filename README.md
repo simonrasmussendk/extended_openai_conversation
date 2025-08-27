@@ -14,6 +14,43 @@ Derived from [OpenAI Conversation](https://www.home-assistant.io/integrations/op
 - Domain-aware entity attributes for smart contextual responses
 - Option to pass the current user's name to OpenAI via the user message context
 - Area support: entity areas are included in the prompt, along with a list of all available areas
+- Add or override models without editing integration files (see section below)
+
+## Add or override models
+
+You can add models not supported by default or override built‑ins without editing the integration files.
+
+This mechanism is designed to support multiple models at the same time. Define one preset per model, each with its own parameters and limits, since parameters can differ between models.
+
+- __Preferred__: Create/edit the file in your HA config directory: `/config/extended_openai_conversation/models.yaml`
+- __Structure__: Provide a `presets:` list where each preset has a unique `key` (this must match the model name/deployment you select in the Options UI).
+
+Minimal example (Azure deployment or custom endpoint):
+
+```yaml
+presets:
+  - key: my-gpt-5-mini    # Use your model/deployment name here
+    label: "My GPT‑5 Mini"
+    parameters:
+      - name: max_completion_tokens
+        type: number
+        min: 1
+        max: 4096
+        default: 500
+        step: 1
+      - name: reasoning_effort
+        type: select
+        options: ["minimal", "low", "medium", "high"]
+        default: "low"
+    limits:
+      max_completion_tokens: 4096
+```
+
+Notes
+- __Azure__: Set the model in Options to your Azure deployment name; the preset `key` must match that name.
+- __Optional parameters__: You may also add `temperature` and `top_p` parameter definitions if your model supports them.
+- __Multiple models__: Create separate presets for each model (e.g., models using `max_tokens` vs `max_completion_tokens`, or different reasoning/temperature constraints).
+- __Reload__: After editing `models.yaml`, reload the integration (or restart Home Assistant) for changes to take effect.
 
 ## Area Support
 
@@ -332,3 +369,14 @@ logger:
   logs:
     custom_components.extended_openai_conversation: info
 ```
+
+## Models and presets
+
+- __Model selection__: Choose the chat model in the integration Options. Built‑in presets include `gpt-4o-mini` and `gpt-5-mini`.
+- __Token handling__: The integration automatically uses `max_tokens` or `max_completion_tokens` depending on the model and will retry if the server prefers the other.
+- __Reasoning effort__: If a preset declares `reasoning_effort`, you can set it to `minimal`, `low`, `medium`, or `high`. If the server/SDK does not support the `reasoning` parameter, the integration automatically drops it and retries.
+
+## Add or override models
+
+This section has moved up near the top under "Additional Features".
+

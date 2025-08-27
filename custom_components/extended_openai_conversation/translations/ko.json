@@ -20,6 +20,12 @@
     },
     "options": {
         "step": {
+            "preset": {
+                "title": "모델 프리셋 선택",
+                "data": {
+                    "model": "모델 프리셋"
+                }
+            },
             "init": {
                 "title": "Extended OpenAI Conversation 옵션",
                 "data": {

@@ -27,6 +27,11 @@ from .const import (
     SERVICE_CLEAR_CONVERSATIONS,
     DATA_CONVERSATION_STORE,
 )
+from .helpers import (
+    async_get_preset_for_model,
+    get_param_names,
+    get_limits,
+)
 
 QUERY_IMAGE_SCHEMA = vol.Schema(
     {
@@ -71,13 +76,52 @@ async def async_setup_services(hass: HomeAssistant, config: ConfigType) -> None:
             ]
             _LOGGER.info("Prompt for %s: %s", model, messages)
 
-            response = await AsyncOpenAI(
+            # Resolve preset and token parameter name with optional clamping (non-blocking)
+            preset = await async_get_preset_for_model(hass, model)
+            preset_param_names = get_param_names(preset) if preset else set()
+            limits = get_limits(preset) if preset else {}
+
+            # Choose token parameter name: preset -> heuristic
+            if "max_completion_tokens" in preset_param_names:
+                token_param_name = "max_completion_tokens"
+            elif "max_tokens" in preset_param_names:
+                token_param_name = "max_tokens"
+            else:
+                token_param_name = "max_completion_tokens" if "gpt-5" in str(model).lower() else "max_tokens"
+
+            # Clamp based on preset limits when defined
+            max_tokens_val = call.data["max_tokens"]
+            limit_val = limits.get(token_param_name)
+            if isinstance(limit_val, int) and isinstance(max_tokens_val, int) and max_tokens_val > limit_val:
+                _LOGGER.debug("Clamping %s from %s to preset limit %s", token_param_name, max_tokens_val, limit_val)
+                max_tokens_val = limit_val
+
+            token_kwargs = {token_param_name: max_tokens_val}
+
+            client = AsyncOpenAI(
                 api_key=hass.data[DOMAIN][call.data["config_entry"]]["api_key"]
-            ).chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=call.data["max_tokens"],
             )
+            try:
+                response = await client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    **token_kwargs,
+                )
+            except Exception as err:
+                # Fallback if server rejects the chosen token parameter
+                err_str = str(err)
+                def _is_unsupported(param: str) -> bool:
+                    return "Unsupported parameter" in err_str and f"'{param}'" in err_str
+                alt_param = "max_tokens" if token_param_name == "max_completion_tokens" else "max_completion_tokens"
+                if _is_unsupported(token_param_name):
+                    alt_token_kwargs = {alt_param: call.data["max_tokens"]}
+                    response = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        **alt_token_kwargs,
+                    )
+                else:
+                    raise
             response_dict = response.model_dump()
             _LOGGER.info("Response %s", response_dict)
         except OpenAIError as err:

@@ -86,6 +86,134 @@ def is_azure(base_url: str):
     return False
 
 
+# -----------------------------
+# Preset loading and utilities
+# -----------------------------
+_PRESETS_CACHE: dict[str, dict[str, Any]] | None = None
+
+
+def _presets_list_to_dict(presets_obj) -> dict[str, dict[str, Any]]:
+    """Normalize presets YAML structure into a dict keyed by preset 'key'."""
+    if not presets_obj:
+        return {}
+    if isinstance(presets_obj, dict):
+        # Already keyed
+        return presets_obj
+    # Expected list of {key, ...}
+    out: dict[str, dict[str, Any]] = {}
+    for item in presets_obj or []:
+        key = item.get("key")
+        if key:
+            out[key] = item
+    return out
+
+
+def load_built_in_presets() -> dict[str, dict[str, Any]]:
+    """Load built-in presets from models.yaml located next to this module."""
+    try:
+        base_dir = os.path.dirname(__file__)
+        path = os.path.join(base_dir, "models.yaml")
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        presets = data.get("presets")
+        return _presets_list_to_dict(presets)
+    except Exception as err:
+        _LOGGER.debug("Failed loading built-in presets: %s", err)
+        return {}
+
+
+def load_user_presets(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
+    """Load user presets from Home Assistant config directory, if present.
+
+    Supported paths (first hit wins):
+    - <config>/extended_openai_conversation/models.yaml
+    - <config>/extended_openai_conversation_models.yaml
+    """
+    candidates = [
+        hass.config.path("extended_openai_conversation/models.yaml"),
+        hass.config.path("extended_openai_conversation_models.yaml"),
+    ]
+    for path in candidates:
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                presets = data.get("presets")
+                return _presets_list_to_dict(presets)
+        except Exception as err:
+            _LOGGER.debug("Failed loading user presets from %s: %s", path, err)
+    return {}
+
+
+def load_presets(hass: HomeAssistant | None) -> dict[str, dict[str, Any]]:
+    """Return merged presets: user overrides built-in by key. Cached in-memory."""
+    global _PRESETS_CACHE
+    # Cache only built-in; still merge user at call to reflect runtime changes
+    try:
+        built_in = load_built_in_presets()
+        user = load_user_presets(hass) if hass else {}
+        merged = dict(built_in)
+        merged.update(user or {})
+        _PRESETS_CACHE = merged
+        return merged
+    except Exception:
+        return _PRESETS_CACHE or {}
+
+
+def get_preset_for_model(hass: HomeAssistant, model: str) -> dict[str, Any] | None:
+    """Resolve a preset by model key. Returns None if not found."""
+    presets = load_presets(hass)
+    return presets.get(str(model))
+
+
+async def async_load_presets(hass: HomeAssistant | None) -> dict[str, dict[str, Any]]:
+    """Async wrapper to load presets without blocking the event loop."""
+    if hass is None:
+        # Fallback to sync if hass is not available
+        return load_presets(hass)
+    return await hass.async_add_executor_job(load_presets, hass)
+
+
+async def async_get_preset_for_model(
+    hass: HomeAssistant, model: str
+) -> dict[str, Any] | None:
+    """Async resolve a preset by model key, using executor to avoid blocking I/O."""
+    presets = await async_load_presets(hass)
+    key = str(model)
+    # Support both dict- and list-shaped presets to be safe
+    if isinstance(presets, dict):
+        return presets.get(key)
+    if isinstance(presets, list):
+        for p in presets:
+            if isinstance(p, dict) and p.get("key") == key:
+                return p
+        return None
+    return None
+
+
+def get_param_names(preset: dict[str, Any] | None) -> set[str]:
+    if not preset:
+        return set()
+    params = preset.get("parameters") or []
+    return {p.get("name") for p in params if isinstance(p, dict) and p.get("name")}
+
+
+def get_limits(preset: dict[str, Any] | None) -> dict[str, Any]:
+    if not preset:
+        return {}
+    limits = preset.get("limits") or {}
+    # Ensure int-like numeric strings are cast to int when reasonable
+    out: dict[str, Any] = {}
+    for k, v in limits.items():
+        try:
+            out[k] = int(v)
+        except Exception:
+            out[k] = v
+    return out
+
+
 def convert_to_template(
     settings,
     template_keys=["data", "event_data", "target", "service"],
@@ -1447,6 +1575,102 @@ class SqliteFunctionExecutor(FunctionExecutor):
             for row in rows:
                 result.append({name: val for name, val in zip(names, row)})
             return result
+
+
+def load_built_in_presets() -> dict:
+    """Load built-in model presets from models.yaml bundled with the integration.
+
+    Returns a dict with key 'presets': list[dict]
+    """
+    try:
+        presets_path = os.path.join(os.path.dirname(__file__), "models.yaml")
+        if not os.path.exists(presets_path):
+            return {"presets": []}
+        with open(presets_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+            if isinstance(data, dict) and isinstance(data.get("presets"), list):
+                return data
+            return {"presets": []}
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Failed to load built-in presets: %s", err)
+        return {"presets": []}
+
+
+def load_user_presets(hass: HomeAssistant) -> dict:
+    """Load user-defined presets from /config/extended_openai_conversation/models.yaml if present."""
+    try:
+        user_path = hass.config.path("extended_openai_conversation/models.yaml")
+        if not os.path.exists(user_path):
+            return {"presets": []}
+        with open(user_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+            if isinstance(data, dict) and isinstance(data.get("presets"), list):
+                return data
+            return {"presets": []}
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Failed to load user presets: %s", err)
+        return {"presets": []}
+
+
+def _merge_presets_lists(base: list[dict], overrides: list[dict]) -> list[dict]:
+    """Merge two preset lists by key, letting overrides replace base by matching 'key'."""
+    merged: dict[str, dict] = {p.get("key"): p for p in base if isinstance(p, dict) and p.get("key")}
+    for p in overrides:
+        if not isinstance(p, dict) or not p.get("key"):
+            continue
+        merged[p["key"]] = p
+    return list(merged.values())
+
+
+def load_presets(hass: HomeAssistant) -> list[dict]:
+    """Return merged presets (built-in + user)."""
+    built_in = load_built_in_presets().get("presets", [])
+    user = load_user_presets(hass).get("presets", [])
+    return _merge_presets_lists(built_in, user)
+
+
+def get_preset_for_model(hass: HomeAssistant, model: str) -> dict | None:
+    """Find a preset by its key matching the configured model string.
+
+    Note: This matches on the preset 'key' only. Deployments (e.g. Azure) can still
+    use a preset by selecting the preset key in options while providing a custom
+    deployment/model string in CONF_CHAT_MODEL separately when the config flow is updated.
+    """
+    try:
+        presets = load_presets(hass)
+        for p in presets:
+            if isinstance(p, dict) and p.get("key") == str(model):
+                return p
+        return None
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("No preset matched for model %s: %s", model, err)
+        return None
+
+
+def get_param_names(preset: dict) -> set[str]:
+    """Return a set of parameter names declared by the preset."""
+    params = preset.get("parameters", []) if isinstance(preset, dict) else []
+    names: set[str] = set()
+    for p in params:
+        if isinstance(p, dict) and p.get("name"):
+            names.add(p["name"])
+    return names
+
+
+def get_param_default(preset: dict, name: str) -> Any | None:
+    """Return the default value for a named parameter, if available."""
+    params = preset.get("parameters", []) if isinstance(preset, dict) else []
+    for p in params:
+        if isinstance(p, dict) and p.get("name") == name:
+            return p.get("default")
+    return None
+
+
+def get_limits(preset: dict) -> dict:
+    """Return non-API limits metadata from the preset (used for validation/clamping)."""
+    if isinstance(preset, dict) and isinstance(preset.get("limits"), dict):
+        return preset["limits"]
+    return {}
 
 
 FUNCTION_EXECUTORS: dict[str, FunctionExecutor] = {

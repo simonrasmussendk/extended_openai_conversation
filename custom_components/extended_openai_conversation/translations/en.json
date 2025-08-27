@@ -20,6 +20,12 @@
     },
     "options": {
         "step": {
+            "preset": {
+                "title": "Select model preset",
+                "data": {
+                    "model": "Model preset"
+                }
+            },
             "init": {
                 "title": "Extended OpenAI Conversation Options",
                 "data": {

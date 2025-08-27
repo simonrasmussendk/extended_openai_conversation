@@ -90,6 +90,9 @@ from .helpers import (
     validate_authentication,
     log_openai_interaction,
     get_domain_entity_attributes,
+    async_get_preset_for_model,
+    get_param_names,
+    get_limits,
 )
 from .services import async_setup_services
 
@@ -198,6 +201,9 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         # We'll initialize the client later to avoid blocking operations during __init__
         self.client = None
         self._initialize_client_task = hass.async_create_task(self._initialize_client())
+        # Cache for deciding which token parameter a given model/deployment accepts
+        # Keyed by the configured model string (can be an Azure deployment name)
+        self._token_param_cache: dict[str, str] = {}
 
     async def _initialize_client(self):
         """Initialize the OpenAI client in an executor to prevent blocking I/O."""
@@ -611,7 +617,15 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
     ) -> OpenAIQueryResponse:
         """Process a sentence."""
         model = self.entry.options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)
-        max_tokens = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
+        # Ensure max_tokens is always an integer. Dynamic preset NumberSelector may yield floats (e.g. 150.0)
+        max_tokens_opt = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
+        try:
+            max_tokens = int(max_tokens_opt)
+        except (TypeError, ValueError):
+            try:
+                max_tokens = int(float(max_tokens_opt))
+            except (TypeError, ValueError):
+                max_tokens = int(DEFAULT_MAX_TOKENS)
         top_p = self.entry.options.get(CONF_TOP_P, DEFAULT_TOP_P)
         temperature = self.entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
         use_tools = self.entry.options.get(CONF_USE_TOOLS, DEFAULT_USE_TOOLS)
@@ -639,15 +653,66 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
 
         _LOGGER.info("Prompt for %s: %s", model, json.dumps(messages))
         
-        # Create request data for logging
+        # Resolve preset for model and derive parameter behavior (non-blocking)
+        preset = await async_get_preset_for_model(self.hass, model)
+        preset_param_names = get_param_names(preset) if preset else set()
+        limits = get_limits(preset) if preset else {}
+        
+        # Heuristic for GPT-5 style backends
+        is_gpt5 = "gpt-5" in str(model).lower()
+        
+        # Choose token parameter name: cache -> preset -> heuristic
+        token_param_name = self._token_param_cache.get(str(model))
+        if not token_param_name:
+            if "max_completion_tokens" in preset_param_names:
+                token_param_name = "max_completion_tokens"
+            elif "max_tokens" in preset_param_names:
+                token_param_name = "max_tokens"
+            else:
+                token_param_name = "max_completion_tokens" if is_gpt5 else "max_tokens"
+        
+        # Enforce optional preset limits by clamping
+        if token_param_name in limits:
+            try:
+                limit_val = int(limits[token_param_name])
+                if isinstance(max_tokens, int) and max_tokens > limit_val:
+                    _LOGGER.debug("Clamping %s from %s to preset limit %s", token_param_name, max_tokens, limit_val)
+                    max_tokens = limit_val
+            except Exception:
+                pass
+        token_kwargs = {token_param_name: max_tokens}
+
+        # Build sampler kwargs respecting model constraints
+        sampler_kwargs: dict[str, Any] = {}
+        if is_gpt5:
+            # Some GPT-5 variants only allow default sampler values; omit non-defaults to prevent 400
+            if temperature == 1:
+                sampler_kwargs["temperature"] = temperature
+            else:
+                _LOGGER.debug("Omitting temperature for %s as model may only support default=1", model)
+            if top_p == 1:
+                sampler_kwargs["top_p"] = top_p
+            else:
+                _LOGGER.debug("Omitting top_p for %s as model may only support default=1", model)
+        else:
+            sampler_kwargs = {"top_p": top_p, "temperature": temperature}
+
+        # Optional reasoning parameter mapping if preset declares reasoning_effort
+        reasoning_kwargs: dict[str, Any] = {}
+        if "reasoning_effort" in preset_param_names:
+            effort = self.entry.options.get("reasoning_effort")
+            if effort:
+                reasoning_kwargs = {"reasoning": {"effort": effort}}
+        
+        # Create request data for logging (reflect chosen params)
         request_data = {
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
-            "top_p": top_p,
-            "temperature": temperature,
+            token_param_name: max_tokens,
             "user": user_input.conversation_id,
-            **tool_kwargs
+            **sampler_kwargs,
+            **reasoning_kwargs,
+            **tool_kwargs,
         }
 
         try:
@@ -658,22 +723,118 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                 asyncio.set_event_loop(loop)
                 try:
                     # Run the async API call in the new event loop
-                    return loop.run_until_complete(
-                        self.client.chat.completions.create(
-                            model=model,
-                            messages=messages,
-                            max_tokens=max_tokens,
-                            top_p=top_p,
-                            temperature=temperature,
-                            user=user_input.conversation_id,
-                            **tool_kwargs,
+                    try:
+                        return loop.run_until_complete(
+                            self.client.chat.completions.create(
+                                model=model,
+                                messages=messages,
+                                user=user_input.conversation_id,
+                                **tool_kwargs,
+                                **token_kwargs,
+                                **sampler_kwargs,
+                                **reasoning_kwargs,
+                            )
                         )
-                    )
+                    except Exception as err:
+                        # Fallback: if API says unsupported parameter, retry with the alternate token param
+                        err_str = str(err)
+                        # Some SDK versions raise a local TypeError for unknown kwargs like 'reasoning'
+                        if isinstance(err, TypeError) and (
+                            "unexpected keyword argument 'reasoning'" in err_str
+                            or "got an unexpected keyword argument 'reasoning'" in err_str
+                        ):
+                            return loop.run_until_complete(
+                                self.client.chat.completions.create(
+                                    model=model,
+                                    messages=messages,
+                                    user=user_input.conversation_id,
+                                    **tool_kwargs,
+                                    **token_kwargs,
+                                    **sampler_kwargs,
+                                )
+                            )
+                        def _is_unsupported(param: str) -> bool:
+                            return "Unsupported parameter" in err_str and f"'{param}'" in err_str
+                        alt_param = "max_tokens" if token_param_name == "max_completion_tokens" else "max_completion_tokens"
+                        if _is_unsupported(token_param_name):
+                            alt_token_kwargs = {alt_param: max_tokens}
+                            result = loop.run_until_complete(
+                                self.client.chat.completions.create(
+                                    model=model,
+                                    messages=messages,
+                                    user=user_input.conversation_id,
+                                    **tool_kwargs,
+                                    **alt_token_kwargs,
+                                    **sampler_kwargs,
+                                    **reasoning_kwargs,
+                                )
+                            )
+                            # Update cache since alternate param worked
+                            self._token_param_cache[str(model)] = alt_param
+                            return result
+                        # If reasoning parameter is unsupported, drop it and retry
+                        def _is_unsupported_value(param: str) -> bool:
+                            return "Unsupported value" in err_str and f"'{param}'" in err_str
+                        if _is_unsupported("reasoning") or _is_unsupported_value("reasoning"):
+                            return loop.run_until_complete(
+                                self.client.chat.completions.create(
+                                    model=model,
+                                    messages=messages,
+                                    user=user_input.conversation_id,
+                                    **tool_kwargs,
+                                    **token_kwargs,
+                                    **sampler_kwargs,
+                                )
+                            )
+                        # Fallback: if server still rejects sampler values, drop them progressively
+                        # If temperature unsupported (value or parameter), drop it and retry
+                        if _is_unsupported("temperature") or _is_unsupported_value("temperature"):
+                            try:
+                                return loop.run_until_complete(
+                                    self.client.chat.completions.create(
+                                        model=model,
+                                        messages=messages,
+                                        user=user_input.conversation_id,
+                                        **tool_kwargs,
+                                        **token_kwargs,
+                                        **({k: v for k, v in sampler_kwargs.items() if k != "temperature"}),
+                                    )
+                                )
+                            except Exception as err2:
+                                err2_str = str(err2)
+                                # If now top_p is also unsupported, drop it too
+                                if _is_unsupported("top_p") or "'top_p'" in err2_str and ("Unsupported parameter" in err2_str or "Unsupported value" in err2_str):
+                                    return loop.run_until_complete(
+                                        self.client.chat.completions.create(
+                                            model=model,
+                                            messages=messages,
+                                            user=user_input.conversation_id,
+                                            **tool_kwargs,
+                                            **token_kwargs,
+                                            # drop both
+                                        )
+                                    )
+                                raise
+                        # If only top_p is unsupported, drop it and retry
+                        if _is_unsupported("top_p") or _is_unsupported_value("top_p"):
+                            return loop.run_until_complete(
+                                self.client.chat.completions.create(
+                                    model=model,
+                                    messages=messages,
+                                    user=user_input.conversation_id,
+                                    **tool_kwargs,
+                                    **token_kwargs,
+                                    **({k: v for k, v in sampler_kwargs.items() if k != "top_p"}),
+                                )
+                            )
+                        raise
                 finally:
                     loop.close()
             
             # Run the OpenAI API call in an executor to prevent blocking I/O
             response: ChatCompletion = await self.hass.async_add_executor_job(execute_openai_request)
+            # On success, cache the token param that was used
+            self._token_param_cache[str(model)] = list(token_kwargs.keys())[0]
             
             # Log the API interaction to a temp file
             response_dict = response.model_dump(exclude_none=True)
@@ -702,7 +863,46 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                 user_input, messages, message, exposed_entities, n_requests + 1
             )
         if choice.finish_reason == "length":
-            raise TokenLengthExceededError(response.usage.completion_tokens)
+            # If we used max_tokens, some GPT-5 style backends require max_completion_tokens instead.
+            # Retry once swapping the token parameter (same numeric cap), then cache the result.
+            used_token_param = list(token_kwargs.keys())[0]
+            if used_token_param == "max_tokens":
+                _LOGGER.debug(
+                    "Finish reason 'length' with %s=%s; retrying once with max_completion_tokens",
+                    used_token_param,
+                    max_tokens,
+                )
+                try:
+                    def execute_retry_swap_param():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            return loop.run_until_complete(
+                                self.client.chat.completions.create(
+                                    model=model,
+                                    messages=messages,
+                                    user=user_input.conversation_id,
+                                    **tool_kwargs,
+                                    **sampler_kwargs,
+                                    **{"max_completion_tokens": max_tokens},
+                                )
+                            )
+                        finally:
+                            loop.close()
+
+                    response_retry: ChatCompletion = await self.hass.async_add_executor_job(execute_retry_swap_param)
+                    # Cache discovered capability
+                    self._token_param_cache[str(model)] = "max_completion_tokens"
+                    response = response_retry
+                    choice = response.choices[0]
+                    message = choice.message
+                    if choice.finish_reason == "length":
+                        raise TokenLengthExceededError(response.usage.completion_tokens)
+                except OpenAIError:
+                    # If swap fails at transport level, surface the original condition
+                    raise TokenLengthExceededError(response.usage.completion_tokens)
+            else:
+                raise TokenLengthExceededError(response.usage.completion_tokens)
 
         return OpenAIQueryResponse(response=response, message=message)
 
