@@ -31,7 +31,10 @@ from .helpers import (
     async_get_preset_for_model,
     get_param_names,
     get_limits,
+    log_openai_interaction,
     resolve_token_parameters,
+    get_custom_parameters,
+    distribute_custom_parameters,
 )
 
 QUERY_IMAGE_SCHEMA = vol.Schema(

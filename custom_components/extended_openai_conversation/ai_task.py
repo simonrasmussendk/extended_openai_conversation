@@ -37,6 +37,8 @@ from .helpers import (
     log_openai_interaction,
     resolve_token_parameters,
     build_sampler_kwargs,
+    get_custom_parameters,
+    distribute_custom_parameters,
 )
 from . import DATA_AGENT  # hass.data key set in __init__
 
@@ -181,6 +183,13 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                 top_p=top_p,
                 preset=preset,
             )
+            
+            # Get custom parameters and distribute them into appropriate categories
+            custom_params = get_custom_parameters(agent.entry, preset)
+            custom_sampler, custom_reasoning, custom_tool, custom_base = distribute_custom_parameters(custom_params)
+            
+            # Merge custom sampler parameters with standard ones
+            sampler_kwargs.update(custom_sampler)
 
             # Optional reasoning mapping if preset declares reasoning_effort
             reasoning_kwargs: dict[str, Any] = {}
@@ -188,14 +197,21 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                 effort = opts.get("reasoning_effort")
                 if effort:
                     reasoning_kwargs = {"reasoning": {"effort": effort}}
+            
+            # Merge custom reasoning parameters
+            reasoning_kwargs.update(custom_reasoning)
 
             # Prepare request payload
             tool_kwargs: dict[str, Any] = {}
+            # Merge custom tool parameters
+            tool_kwargs.update(custom_tool)
+            
             base_kwargs: dict[str, Any] = {
                 "model": model,
                 "messages": messages,
                 "user": conversation_id,
                 **tool_kwargs,
+                **custom_base,  # Include custom base parameters
             }
             # Response format for structured output
             if response_format is not None:

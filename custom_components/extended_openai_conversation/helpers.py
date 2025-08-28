@@ -482,6 +482,134 @@ def get_model_config(entry: ConfigEntry) -> dict[str, Any]:
     }
 
 
+def get_custom_parameters(
+    entry: ConfigEntry, 
+    preset: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Extract custom parameters from config entry and preset.
+    
+    Args:
+        entry: The config entry containing user options
+        preset: Optional preset configuration
+        
+    Returns:
+        Dictionary of custom parameters not in the standard set
+    """
+    from .const import (
+        CONF_CHAT_MODEL, CONF_MAX_TOKENS, CONF_TEMPERATURE, CONF_TOP_P,
+        CONF_USE_TOOLS, CONF_CONTEXT_THRESHOLD, CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
+        CONF_ATTACH_USERNAME, CONF_PROMPT, CONF_DOMAIN_KEYWORDS,
+        CONF_CONTEXT_TRUNCATE_STRATEGY, CONF_FUNCTIONS, CONF_ENABLE_STT,
+        CONF_ORGANIZATION, CONF_BASE_URL, CONF_API_VERSION, CONF_SKIP_AUTHENTICATION,
+        CONF_CONVERSATION_EXPIRATION_TIME, CONF_PAYLOAD_TEMPLATE,
+        CONF_STT_API_KEY, CONF_STT_BASE_URL, CONF_STT_API_VERSION,
+        CONF_STT_ORGANIZATION, CONF_STT_MODEL, CONF_STT_LANGUAGE,
+    )
+    
+    # Standard parameters that shouldn't be treated as custom
+    standard_params = {
+        CONF_CHAT_MODEL, CONF_MAX_TOKENS, CONF_TEMPERATURE, CONF_TOP_P,
+        CONF_USE_TOOLS, CONF_CONTEXT_THRESHOLD, CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
+        CONF_ATTACH_USERNAME, CONF_PROMPT, CONF_DOMAIN_KEYWORDS,
+        CONF_CONTEXT_TRUNCATE_STRATEGY, CONF_FUNCTIONS, CONF_ENABLE_STT,
+        CONF_ORGANIZATION, CONF_BASE_URL, CONF_API_VERSION, CONF_SKIP_AUTHENTICATION,
+        CONF_CONVERSATION_EXPIRATION_TIME, CONF_PAYLOAD_TEMPLATE,
+        CONF_STT_API_KEY, CONF_STT_BASE_URL, CONF_STT_API_VERSION,
+        CONF_STT_ORGANIZATION, CONF_STT_MODEL, CONF_STT_LANGUAGE,
+        "reasoning_effort",  # Special case
+    }
+    
+    custom_params = {}
+    
+    # Extract custom parameters from config entry options
+    for key, value in entry.options.items():
+        if key not in standard_params and value is not None:
+            custom_params[key] = value
+    
+    # Extract custom parameters from preset
+    if preset:
+        preset_param_names = get_param_names(preset)
+        for param_name in preset_param_names:
+            if param_name not in standard_params:
+                # Get the parameter value from preset
+                if param_name in preset:
+                    custom_params[param_name] = preset[param_name]
+    
+    return custom_params
+
+
+def classify_custom_parameter(param_name: str, param_value: Any) -> str:
+    """Classify a custom parameter into the appropriate category.
+    
+    Args:
+        param_name: Name of the parameter
+        param_value: Value of the parameter
+        
+    Returns:
+        Category name: 'sampler', 'reasoning', 'tool', or 'base'
+    """
+    # Sampling-related parameters
+    sampler_keywords = {
+        'temperature', 'temp', 'top_p', 'top_k', 'frequency_penalty', 
+        'presence_penalty', 'repetition_penalty', 'typical_p', 'tfs',
+        'top_a', 'epsilon_cutoff', 'eta_cutoff'
+    }
+    
+    # Reasoning-related parameters
+    reasoning_keywords = {
+        'reasoning', 'chain_of_thought', 'cot', 'thinking', 'reflection'
+    }
+    
+    # Tool-related parameters
+    tool_keywords = {
+        'tool', 'function', 'parallel_tool_calls', 'tool_choice'
+    }
+    
+    param_lower = param_name.lower()
+    
+    # Check for exact matches or substring matches
+    if any(keyword in param_lower for keyword in sampler_keywords):
+        return 'sampler'
+    elif any(keyword in param_lower for keyword in reasoning_keywords):
+        return 'reasoning'
+    elif any(keyword in param_lower for keyword in tool_keywords):
+        return 'tool'
+    else:
+        # Default to base parameters for unknown types
+        return 'base'
+
+
+def distribute_custom_parameters(
+    custom_params: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Distribute custom parameters into appropriate categories.
+    
+    Args:
+        custom_params: Dictionary of custom parameters
+        
+    Returns:
+        Tuple of (sampler_kwargs, reasoning_kwargs, tool_kwargs, base_kwargs)
+    """
+    sampler_kwargs = {}
+    reasoning_kwargs = {}
+    tool_kwargs = {}
+    base_kwargs = {}
+    
+    for param_name, param_value in custom_params.items():
+        category = classify_custom_parameter(param_name, param_value)
+        
+        if category == 'sampler':
+            sampler_kwargs[param_name] = param_value
+        elif category == 'reasoning':
+            reasoning_kwargs[param_name] = param_value
+        elif category == 'tool':
+            tool_kwargs[param_name] = param_value
+        else:  # 'base'
+            base_kwargs[param_name] = param_value
+    
+    return sampler_kwargs, reasoning_kwargs, tool_kwargs, base_kwargs
+
+
 def read_json_file(file_path: str) -> dict | list | None:
     """Read and parse a JSON file.
     

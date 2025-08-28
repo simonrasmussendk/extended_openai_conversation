@@ -98,6 +98,8 @@ from .helpers import (
     execute_openai_request_with_fallbacks,
     build_sampler_kwargs,
     get_model_config,
+    get_custom_parameters,
+    distribute_custom_parameters,
 )
 from .services import async_setup_services
 
@@ -682,12 +684,26 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             preset=preset,
         )
 
+        # Get custom parameters and distribute them into appropriate categories
+        custom_params = get_custom_parameters(self.entry, preset)
+        custom_sampler, custom_reasoning, custom_tool, custom_base = distribute_custom_parameters(custom_params)
+        
+        # Merge custom sampler parameters with standard ones
+        sampler_kwargs.update(custom_sampler)
+        
         # Optional reasoning parameter mapping if preset declares reasoning_effort
         reasoning_kwargs: dict[str, Any] = {}
         if "reasoning_effort" in preset_param_names:
             effort = config["reasoning_effort"]
             if effort:
                 reasoning_kwargs = {"reasoning": {"effort": effort}}
+        
+        # Merge custom reasoning parameters
+        reasoning_kwargs.update(custom_reasoning)
+        
+        # Log custom parameters being used
+        if custom_params:
+            _LOGGER.debug("Using custom parameters: %s", custom_params)
         
         # Create request data for logging (reflect chosen params)
         request_data = {
@@ -714,8 +730,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                             token_kwargs=token_kwargs,
                             sampler_kwargs=sampler_kwargs,
                             reasoning_kwargs=reasoning_kwargs,
-                            tool_kwargs=tool_kwargs,
-                            base_kwargs={"user": user_input.conversation_id},
+                            tool_kwargs={**tool_kwargs, **custom_tool},
+                            base_kwargs={"user": user_input.conversation_id, **custom_base},
                             token_param_cache=self._token_param_cache,
                         )
                     )
