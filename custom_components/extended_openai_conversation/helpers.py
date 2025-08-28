@@ -146,38 +146,55 @@ class ModelCapabilities:
         return param_name in self._preset_param_names
 
 
-def extract_and_validate_model_params(options: dict) -> dict:
-    """Extract and validate model parameters from config options.
+def extract_dynamic_model_params(options: dict, preset: dict[str, Any] | None = None) -> dict:
+    """Extract model parameters dynamically based on preset configuration.
     
     Args:
         options: Dictionary of configuration options
+        preset: Optional preset configuration to determine which parameters to extract
         
     Returns:
-        Dictionary containing validated model parameters
+        Dictionary containing dynamically extracted parameters
     """
-    from .const import (
-        CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL,
-        CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS,
-        CONF_TEMPERATURE, DEFAULT_TEMPERATURE,
-        CONF_TOP_P, DEFAULT_TOP_P,
-    )
+    from .const import CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL
     
-    # Extract and validate max_tokens with proper type conversion
-    max_tokens_opt = options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
-    try:
-        max_tokens = int(max_tokens_opt)
-    except (TypeError, ValueError):
-        try:
-            max_tokens = int(float(max_tokens_opt))
-        except (TypeError, ValueError):
-            max_tokens = int(DEFAULT_MAX_TOKENS)
-    
-    return {
+    result = {
         "model": options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
-        "max_tokens": max_tokens,
-        "temperature": options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE),
-        "top_p": options.get(CONF_TOP_P, DEFAULT_TOP_P),
     }
+    
+    if not preset:
+        # No preset: return just the model
+        return result
+    
+    # Extract parameters dynamically based on preset configuration
+    param_names = get_param_names(preset)
+    
+    for param_name in param_names:
+        if param_name in options:
+            value = options[param_name]
+            
+            # Handle numeric parameters with type conversion
+            if isinstance(value, str) and value.replace('.', '').replace('-', '').isdigit():
+                try:
+                    # For token parameters, always use int to avoid decimal issues
+                    if param_name in ['max_tokens', 'max_completion_tokens']:
+                        result[param_name] = int(float(value))  # Convert via float first to handle "150.0"
+                    elif '.' in value:
+                        result[param_name] = float(value)
+                    else:
+                        result[param_name] = int(value)
+                except (ValueError, TypeError):
+                    result[param_name] = value
+            elif isinstance(value, (int, float)):
+                # Ensure token parameters are integers even if passed as float
+                if param_name in ['max_tokens', 'max_completion_tokens']:
+                    result[param_name] = int(value)
+                else:
+                    result[param_name] = value
+            else:
+                result[param_name] = value
+    
+    return result
 
 
 # -----------------------------
@@ -310,7 +327,7 @@ def get_limits(preset: dict[str, Any] | None) -> dict[str, Any]:
 
 def resolve_token_parameters(
     model: str,
-    max_tokens: int,
+    model_params: dict[str, Any],
     preset: dict[str, Any] | None = None,
     token_param_cache: dict[str, str] | None = None,
 ) -> tuple[dict[str, int], str]:
@@ -318,7 +335,7 @@ def resolve_token_parameters(
     
     Args:
         model: The model name/identifier
-        max_tokens: The desired max tokens value
+        model_params: Dictionary containing model parameters including token values
         preset: Optional preset configuration
         token_param_cache: Optional cache of previously resolved token parameters
         
@@ -331,41 +348,52 @@ def resolve_token_parameters(
     # Get preferred token parameter from preset
     preferred_token_param = get_preferred_token_param(preset)
     
-    # Import logger (moved to top of function for efficiency)
-    import logging
-    _LOGGER = logging.getLogger(__name__)
-    
-    # Choose token parameter name: cache -> preset -> default
-    token_param_name = None
-    if token_param_cache:
-        cached_param = token_param_cache.get(str(model))
-        # Only use cached value if it matches what the preset expects
-        if cached_param and (
-            not preset or cached_param in preset_param_names
-        ):
-            token_param_name = cached_param
-    
-    if not token_param_name:
-        # Use preset-based logic
+    # Use cached value if available, otherwise determine and cache
+    if token_param_cache is not None:
+        if model in token_param_cache:
+            token_param_name = token_param_cache[model]
+        else:
+            token_param_name = preferred_token_param
+            token_param_cache[model] = token_param_name
+    else:
         token_param_name = preferred_token_param
     
+    # Find the token value from model_params
+    token_value = None
+    for param_name, value in model_params.items():
+        if param_name == token_param_name:
+            token_value = value
+            break
+    
+    # If not found, try alternative token parameter names
+    if token_value is None:
+        for alt_param in ["max_tokens", "max_completion_tokens"]:
+            if alt_param in model_params:
+                token_value = model_params[alt_param]
+                token_param_name = alt_param
+                break
+    
+    # Default fallback
+    if token_value is None:
+        token_value = 150
+    
     # Enforce optional preset limits by clamping and ensure integer type
-    final_max_tokens = max_tokens
+    final_token_value = token_value
     if token_param_name in limits:
         try:
             limit_val = int(limits[token_param_name])
-            if isinstance(max_tokens, (int, float)) and max_tokens > limit_val:
-                final_max_tokens = limit_val
+            if isinstance(token_value, (int, float)) and token_value > limit_val:
+                final_token_value = limit_val
         except Exception:
             pass
     
-    # Ensure final_max_tokens is always an integer
+    # Ensure final_token_value is always an integer
     try:
-        final_max_tokens = int(final_max_tokens)
+        final_token_value = int(final_token_value)
     except (TypeError, ValueError):
-        final_max_tokens = int(max_tokens) if max_tokens else 150
+        final_token_value = int(token_value) if token_value else 150
     
-    return {token_param_name: final_max_tokens}, token_param_name
+    return {token_param_name: final_token_value}, token_param_name
 
 
 async def execute_openai_chat_completion(
@@ -535,56 +563,46 @@ async def execute_openai_request_with_fallbacks(
         raise
 
 
-def build_sampler_kwargs(
-    model: str,
-    temperature: float,
-    top_p: float,
+def build_dynamic_request_params(
+    model_params: dict[str, Any],
     preset: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build sampler kwargs respecting model constraints.
+    """Build request parameters dynamically based on preset configuration.
     
     Args:
-        model: The model name/identifier
-        temperature: Temperature value
-        top_p: Top-p value
+        model_params: Dictionary of model parameters from configuration
         preset: Optional preset configuration
         
     Returns:
-        Dictionary of sampler parameters to include in API request
+        Dictionary of parameters to include in API request
     """
-    preset_param_names = get_param_names(preset) if preset else set()
-    
-    sampler_kwargs: dict[str, Any] = {}
-    
-    # Use preset-based logic for all models
     if not preset:
-        # No preset: include standard parameters
-        sampler_kwargs["temperature"] = temperature
-        sampler_kwargs["top_p"] = top_p
-    else:
-        # Preset exists: only include parameters defined in the preset
-        if "temperature" in preset_param_names:
-            sampler_kwargs["temperature"] = temperature
-        if "top_p" in preset_param_names:
-            sampler_kwargs["top_p"] = top_p
+        # No preset: return all non-model parameters
+        return {k: v for k, v in model_params.items() if k != "model"}
     
-    return sampler_kwargs
+    # Get parameters defined in the preset
+    preset_param_names = get_param_names(preset)
+    
+    # Only include parameters that are defined in the preset
+    request_params = {}
+    for param_name in preset_param_names:
+        if param_name in model_params:
+            request_params[param_name] = model_params[param_name]
+    
+    return request_params
 
 
-def get_model_config(entry: ConfigEntry) -> dict[str, Any]:
-    """Get model configuration from config entry options with defaults.
+def get_basic_config(entry: ConfigEntry) -> dict[str, Any]:
+    """Get basic non-model configuration from config entry options.
     
     Args:
         entry: The config entry containing user options
         
     Returns:
-        Dictionary containing all model configuration parameters
+        Dictionary containing basic configuration parameters (non-model specific)
     """
     from .const import (
         CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL,
-        CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS,
-        CONF_TEMPERATURE, DEFAULT_TEMPERATURE,
-        CONF_TOP_P, DEFAULT_TOP_P,
         CONF_USE_TOOLS, DEFAULT_USE_TOOLS,
         CONF_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_THRESHOLD,
         CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION, DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
@@ -596,21 +614,8 @@ def get_model_config(entry: ConfigEntry) -> dict[str, Any]:
         CONF_ENABLE_STT,
     )
     
-    # Get max_tokens with proper type conversion
-    max_tokens_opt = entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
-    try:
-        max_tokens = int(max_tokens_opt)
-    except (TypeError, ValueError):
-        try:
-            max_tokens = int(float(max_tokens_opt))
-        except (TypeError, ValueError):
-            max_tokens = int(DEFAULT_MAX_TOKENS)
-    
     return {
         "model": entry.options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
-        "max_tokens": max_tokens,
-        "temperature": entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE),
-        "top_p": entry.options.get(CONF_TOP_P, DEFAULT_TOP_P),
         "use_tools": entry.options.get(CONF_USE_TOOLS, DEFAULT_USE_TOOLS),
         "context_threshold": entry.options.get(CONF_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_THRESHOLD),
         "max_function_calls": entry.options.get(
@@ -626,7 +631,6 @@ def get_model_config(entry: ConfigEntry) -> dict[str, Any]:
         ),
         "functions": entry.options.get(CONF_FUNCTIONS),
         "enable_stt": entry.options.get(CONF_ENABLE_STT),
-        "reasoning_effort": entry.options.get("reasoning_effort"),
     }
 
 

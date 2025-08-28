@@ -88,7 +88,7 @@ from .helpers import (
     get_function_executor,
     is_azure,
     get_preferred_token_param,
-    extract_and_validate_model_params,
+    extract_dynamic_model_params,
     validate_authentication,
     log_openai_interaction,
     get_domain_entity_attributes,
@@ -97,9 +97,9 @@ from .helpers import (
     get_limits,
     create_openai_client,
     resolve_token_parameters,
-    execute_openai_request_with_fallbacks,
-    build_sampler_kwargs,
-    get_model_config,
+    execute_openai_chat_completion,
+    build_dynamic_request_params,
+    get_basic_config,
     get_custom_parameters,
     distribute_custom_parameters,
 )
@@ -175,7 +175,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Forward STT platform setup if enabled in options
     try:
-        config = get_model_config(entry)
+        config = get_basic_config(entry)
         if config["enable_stt"]:
             await hass.config_entries.async_forward_entry_setups(entry, ["stt"])
             data["stt_loaded"] = True
@@ -307,7 +307,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             self.conversation_store.save_conversation(conversation_id, messages)
         
         user_message = {"role": "user", "content": user_input.text}
-        config = get_model_config(self.entry)
+        config = get_basic_config(self.entry)
         if config["attach_username"]:
             user = user_input.context.user_id
             if user is not None:
@@ -396,7 +396,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
     def _generate_system_message(
         self, exposed_entities, user_input: conversation.ConversationInput
     ):
-        config = get_model_config(self.entry)
+        config = get_basic_config(self.entry)
         raw_prompt = config["prompt"]
         prompt = self._async_generate_prompt(raw_prompt, exposed_entities, user_input)
         return {"role": "system", "content": prompt}
@@ -484,7 +484,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             - heat
         ```
         """
-        config = get_model_config(self.entry)
+        config = get_basic_config(self.entry)
         domain_keywords = config["domain_keywords"]
         if not domain_keywords:
             return {}
@@ -590,7 +590,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
 
     def get_functions(self):
         try:
-            config = get_model_config(self.entry)
+            config = get_basic_config(self.entry)
             function = config["functions"]
             result = yaml.safe_load(function) if function else DEFAULT_CONF_FUNCTIONS
             if result:
@@ -611,7 +611,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         self, messages, exposed_entities, user_input: conversation.ConversationInput
     ):
         """Truncate message history."""
-        config = get_model_config(self.entry)
+        config = get_basic_config(self.entry)
         strategy = config["context_truncate_strategy"]
 
         if strategy == "clear":
@@ -636,13 +636,16 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         n_requests,
     ) -> OpenAIQueryResponse:
         """Process a sentence."""
-        config = get_model_config(self.entry)
+        config = get_basic_config(self.entry)
         model = config["model"]
-        max_tokens = config["max_tokens"]
-        top_p = config["top_p"]
-        temperature = config["temperature"]
         use_tools = config["use_tools"]
         context_threshold = config["context_threshold"]
+        
+        # Get preset and extract parameters dynamically
+        preset = await async_get_preset_for_model(self.hass, model)
+        opts = {**self.entry.options}
+        model_params = extract_dynamic_model_params(opts, preset)
+        
         functions = list(map(lambda s: s["spec"], self.get_functions()))
 
         function_call = "auto"
@@ -661,48 +664,44 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
 
         _LOGGER.info("Prompt for %s: %s", model, json.dumps(messages))
         
-        # Resolve preset for model and derive parameter behavior (non-blocking)
-        preset = await async_get_preset_for_model(self.hass, model)
-        preset_param_names = get_param_names(preset) if preset else set()
-        
         # Resolve token parameters using centralized logic
         token_kwargs, token_param_name = resolve_token_parameters(
             model=model,
-            max_tokens=max_tokens,
+            model_params=model_params,
             preset=preset,
             token_param_cache=self._token_param_cache,
         )
         
         # Log if clamping occurred
-        final_max_tokens = token_kwargs[token_param_name]
-        if final_max_tokens != max_tokens:
-            _LOGGER.warning("Clamped %s from %s to %s based on preset limit - check your model preset configuration", token_param_name, max_tokens, final_max_tokens)
+        final_token_value = token_kwargs[token_param_name]
+        configured_token_value = model_params.get(token_param_name)
+        if configured_token_value and final_token_value != configured_token_value:
+            _LOGGER.warning("Clamped %s from %s to %s based on preset limit - check your model preset configuration", token_param_name, configured_token_value, final_token_value)
         
-        _LOGGER.debug("Using token parameter %s=%s for model %s", token_param_name, final_max_tokens, model)
+        _LOGGER.debug("Using token parameter %s=%s for model %s", token_param_name, final_token_value, model)
         
-        # Build sampler kwargs using centralized logic
-        sampler_kwargs = build_sampler_kwargs(
-            model=model,
-            temperature=temperature,
-            top_p=top_p,
-            preset=preset,
-        )
-
+        # Build request parameters dynamically
+        request_params = build_dynamic_request_params(model_params, preset)
+        
         # Get custom parameters and distribute them into appropriate categories
         custom_params = get_custom_parameters(self.entry, preset)
         custom_sampler, custom_reasoning, custom_tool, custom_base = distribute_custom_parameters(custom_params)
-        
+    
         # Remove any token parameters from custom parameters to avoid conflicts
         custom_sampler = {k: v for k, v in custom_sampler.items() if k not in ['max_tokens', 'max_completion_tokens']}
         custom_base = {k: v for k, v in custom_base.items() if k not in ['max_tokens', 'max_completion_tokens']}
         
-        # Merge custom sampler parameters with standard ones
-        sampler_kwargs.update(custom_sampler)
+        # Merge custom sampler parameters with request parameters
+        request_params.update(custom_sampler)
         
+        # Remove token parameters from request_params to avoid conflicts with token_kwargs
+        request_params = {k: v for k, v in request_params.items() if k not in ['max_tokens', 'max_completion_tokens']}
+    
         # Optional reasoning parameter mapping if preset declares reasoning_effort
         reasoning_kwargs: dict[str, Any] = {}
+        preset_param_names = get_param_names(preset) if preset else set()
         if "reasoning_effort" in preset_param_names:
-            effort = config["reasoning_effort"]
+            effort = model_params.get("reasoning_effort")
             if effort:
                 reasoning_kwargs = {"reasoning": {"effort": effort}}
         
@@ -717,38 +716,24 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         request_data = {
             "model": model,
             "messages": messages,
-            token_param_name: max_tokens,
+            **token_kwargs,
             "user": user_input.conversation_id,
-            **sampler_kwargs,
+            **request_params,
             **reasoning_kwargs,
             **tool_kwargs,
         }
 
         try:
-            # Move the OpenAI API call to an executor to prevent blocking I/O operations
-            def execute_openai_request():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    return loop.run_until_complete(
-                        execute_openai_request_with_fallbacks(
-                            client=self.client,
-                            model=model,
-                            messages=messages,
-                            token_kwargs=token_kwargs,
-                            sampler_kwargs=sampler_kwargs,
-                            tool_kwargs={**tool_kwargs, **custom_tool},
-                            custom_kwargs={**reasoning_kwargs, "user": user_input.conversation_id, **custom_base},
-                            token_param_name=token_param_name,
-                            logger=_LOGGER,
-                            token_param_cache=self._token_param_cache,
-                        )
-                    )
-                finally:
-                    loop.close()
-            
-            # Run the OpenAI API call in an executor to prevent blocking I/O
-            response: ChatCompletion = await self.hass.async_add_executor_job(execute_openai_request)
+            # Execute OpenAI API call directly (already async)
+            response: ChatCompletion = await execute_openai_chat_completion(
+                client=self.client,
+                model=model,
+                messages=messages,
+                token_kwargs=token_kwargs,
+                sampler_kwargs=request_params,
+                tool_kwargs=tool_kwargs,
+                custom_kwargs=custom_base,
+            )
             # On success, cache the token param that was used
             self._token_param_cache[str(model)] = list(token_kwargs.keys())[0]
             

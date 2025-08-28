@@ -36,11 +36,12 @@ from .helpers import (
     get_limits,
     log_openai_interaction,
     resolve_token_parameters,
-    build_sampler_kwargs,
+    build_dynamic_request_params,
     get_custom_parameters,
     distribute_custom_parameters,
     get_preferred_token_param,
-    extract_and_validate_model_params,
+    extract_dynamic_model_params,
+    execute_openai_chat_completion,
 )
 from . import DATA_AGENT  # hass.data key set in __init__
 
@@ -149,51 +150,45 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
 
         # Read parameters and prepare request; surface errors instead of raising
         try:
-            # Read parameters from options using centralized function
+            # Get model and preset first
             opts = {**self.entry.options}
-            params = extract_and_validate_model_params(opts)
-            model = params["model"]
-            max_tokens = params["max_tokens"]
-            temperature = params["temperature"]
-            top_p = params["top_p"]
-
-            # Get preset for dynamic parameter behavior
+            model = opts.get("chat_model", "gpt-4o-mini")
             preset = await async_get_preset_for_model(self.hass, model)
-            preset_param_names = get_param_names(preset) if preset else set()
+            
+            # Extract parameters dynamically based on preset
+            model_params = extract_dynamic_model_params(opts, preset)
 
             # Use centralized token parameter resolution
             agent_cache = getattr(agent, "_token_param_cache", {})
             token_kwargs, token_param_name = resolve_token_parameters(
                 model=model,
-                max_tokens=max_tokens,
+                model_params=model_params,
                 preset=preset,
                 token_param_cache=agent_cache,
             )
 
-            # Build sampler kwargs using centralized logic
-            sampler_kwargs = build_sampler_kwargs(
-                model=model,
-                temperature=temperature,
-                top_p=top_p,
-                preset=preset,
-            )
+            # Build request parameters dynamically
+            request_params = build_dynamic_request_params(model_params, preset)
             
             # Get custom parameters and distribute them into appropriate categories
             custom_params = get_custom_parameters(agent.entry, preset)
             custom_sampler, custom_reasoning, custom_tool, custom_base = distribute_custom_parameters(custom_params)
             
-            
             # Remove any token parameters from custom parameters to avoid conflicts
             custom_sampler = {k: v for k, v in custom_sampler.items() if k not in ['max_tokens', 'max_completion_tokens']}
             custom_base = {k: v for k, v in custom_base.items() if k not in ['max_tokens', 'max_completion_tokens']}
             
-            # Merge custom sampler parameters with standard ones
-            sampler_kwargs.update(custom_sampler)
+            # Merge custom sampler parameters with request parameters
+            request_params.update(custom_sampler)
+            
+            # Remove token parameters from request_params to avoid conflicts with token_kwargs
+            request_params = {k: v for k, v in request_params.items() if k not in ['max_tokens', 'max_completion_tokens']}
 
             # Optional reasoning mapping if preset declares reasoning_effort
             reasoning_kwargs: dict[str, Any] = {}
+            preset_param_names = get_param_names(preset) if preset else set()
             if "reasoning_effort" in preset_param_names:
-                effort = opts.get("reasoning_effort")
+                effort = model_params.get("reasoning_effort")
                 if effort:
                     reasoning_kwargs = {"reasoning": {"effort": effort}}
             
@@ -216,13 +211,22 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
             if response_format is not None:
                 base_kwargs["response_format"] = response_format
 
+            response = await execute_openai_chat_completion(
+                client=agent.client,
+                model=model,
+                messages=messages,
+                token_kwargs=token_kwargs,
+                sampler_kwargs=request_params,
+                response_format=response_format,
+            )
+
             # For logging
             request_data = {
                 "model": model,
                 "messages": messages,
-                token_param_name: max_tokens,
+                **token_kwargs,
                 "user": conversation_id,
-                **sampler_kwargs,
+                **request_params,
                 **reasoning_kwargs,
                 **tool_kwargs,
             }
@@ -238,7 +242,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                 resp = await agent.client.chat.completions.create(
                     **base_kwargs,
                     **token_kwargs,
-                    **sampler_kwargs,
+                    **request_params,
                     **reasoning_kwargs,
                 )
             except Exception as err:  # noqa: BLE001
@@ -251,7 +255,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                     resp = await agent.client.chat.completions.create(
                         **base_kwargs,
                         **token_kwargs,
-                        **sampler_kwargs,
+                        **request_params,
                     )
                 else:
                     def _is_unsupported(param: str) -> bool:
@@ -272,7 +276,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                         resp = await agent.client.chat.completions.create(
                             **base_no_rf,
                             **token_kwargs,
-                            **sampler_kwargs,
+                            **request_params,
                             **reasoning_kwargs,
                         )
                     # Swap token parameter if unsupported
@@ -282,7 +286,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                         resp = await agent.client.chat.completions.create(
                             **base_kwargs,
                             **alt_token_kwargs,
-                            **sampler_kwargs,
+                            **request_params,
                             **reasoning_kwargs,
                         )
                         # Cache discovered capability
@@ -298,7 +302,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                         resp = await agent.client.chat.completions.create(
                             **base_kwargs,
                             **token_kwargs,
-                            **sampler_kwargs,
+                            **request_params,
                         )
                     # If temperature unsupported, drop it; if then top_p also fails, drop both
                     elif _is_unsupported("temperature") or _is_unsupported_value("temperature"):
@@ -306,7 +310,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                             resp = await agent.client.chat.completions.create(
                                 **base_kwargs,
                                 **token_kwargs,
-                                **({k: v for k, v in sampler_kwargs.items() if k != "temperature"}),
+                                **({k: v for k, v in request_params.items() if k != "temperature"}),
                             )
                         except Exception as err2:  # noqa: BLE001
                             err2_str = str(err2)
@@ -322,7 +326,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                         resp = await agent.client.chat.completions.create(
                             **base_kwargs,
                             **token_kwargs,
-                            **({k: v for k, v in sampler_kwargs.items() if k != "top_p"}),
+                            **({k: v for k, v in request_params.items() if k != "top_p"}),
                         )
                     else:
                         raise
@@ -352,7 +356,7 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                             alt_token_value = list(token_kwargs.values())[0]  # Get the actual token value
                             resp_retry = await agent.client.chat.completions.create(
                                 **base_kwargs,
-                                **sampler_kwargs,
+                                **request_params,
                                 **{alt_param: alt_token_value},
                             )
                             try:

@@ -31,9 +31,9 @@ from .helpers import (
     create_openai_client,
     log_openai_interaction,
     resolve_token_parameters,
-    build_sampler_kwargs,
+    build_dynamic_request_params,
     async_get_preset_for_model,
-    extract_and_validate_model_params,
+    extract_dynamic_model_params,
     get_preferred_token_param,
 )
 
@@ -70,11 +70,22 @@ async def async_setup_services(hass: HomeAssistant, config: ConfigType) -> None:
         """Query an image."""
         try:
             entry = hass.config_entries.async_get_entry(call.data["config_entry"])
-            params = extract_and_validate_model_params(entry.options)
-            model = params["model"]
-            max_tokens = params["max_tokens"]
-            temperature = params["temperature"]
-            top_p = params["top_p"]
+            # Get model and preset first
+            model = entry.options.get("chat_model", "gpt-4o-mini")
+            preset = await async_get_preset_for_model(hass, model)
+            
+            # Extract parameters dynamically based on preset
+            model_params = extract_dynamic_model_params(entry.options, preset)
+            
+            # Resolve token parameters
+            token_kwargs, token_param_name = resolve_token_parameters(
+                model=model,
+                model_params=model_params,
+                preset=preset,
+            )
+            
+            # Build request parameters dynamically
+            request_params = build_dynamic_request_params(model_params, preset)
 
             images = [
                 {"type": "image_url", "image_url": to_image_param(hass, image)}
@@ -89,41 +100,29 @@ async def async_setup_services(hass: HomeAssistant, config: ConfigType) -> None:
             ]
             _LOGGER.info("Prompt for %s: %s", model, messages)
 
-            # Resolve preset and token parameter name with optional clamping (non-blocking)
-            preset = await async_get_preset_for_model(hass, model)
-            
-            # Use centralized token parameter resolution
-            agent = hass.data[DOMAIN].get(entry.entry_id)
-            token_cache = getattr(agent, "_token_param_cache", {}) if agent else {}
-            token_kwargs, _ = resolve_token_parameters(
-                model=model,
-                max_tokens=max_tokens,
-                preset=preset,
-                token_param_cache=token_cache,
-            )
-            
-            # Build sampler parameters
-            sampler_kwargs = build_sampler_kwargs(model, temperature, top_p, preset)
-            
             # Prepare API request parameters
-            request_params = {
+            api_request_params = {
                 "model": model,
                 "messages": messages,
                 **token_kwargs,
-                **sampler_kwargs,
+                **request_params,
             }
 
             client = create_openai_client(hass, entry)
             try:
-                response = await client.chat.completions.create(**request_params)
+                response = await client.chat.completions.create(**api_request_params)
             except Exception as err:
                 # Fallback if server rejects the chosen token parameter
                 err_str = str(err)
                 def _is_unsupported(param: str) -> bool:
                     return "Unsupported parameter" in err_str and f"'{param}'" in err_str
-                alt_param = "max_tokens" if "max_completion_tokens" in request_params else "max_completion_tokens"
+                # Get the current token parameter and its value
+                current_token_param = list(token_kwargs.keys())[0] if token_kwargs else None
+                current_token_value = list(token_kwargs.values())[0] if token_kwargs else 150
+                
+                alt_param = "max_tokens" if current_token_param == "max_completion_tokens" else "max_completion_tokens"
                 if _is_unsupported("max_completion_tokens") or _is_unsupported("max_tokens"):
-                    alt_token_kwargs = {alt_param: max_tokens}
+                    alt_token_kwargs = {alt_param: current_token_value}
                     response = await client.chat.completions.create(
                         model=model,
                         messages=messages,
