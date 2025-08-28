@@ -97,6 +97,7 @@ from .helpers import (
     resolve_token_parameters,
     execute_openai_request_with_fallbacks,
     build_sampler_kwargs,
+    get_model_config,
 )
 from .services import async_setup_services
 
@@ -170,7 +171,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Forward STT platform setup if enabled in options
     try:
-        if entry.options.get(CONF_ENABLE_STT):
+        config = get_model_config(entry)
+        if config["enable_stt"]:
             await hass.config_entries.async_forward_entry_setups(entry, ["stt"])
             data["stt_loaded"] = True
     except Exception as err:  # noqa: BLE001
@@ -301,7 +303,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             self.conversation_store.save_conversation(conversation_id, messages)
         
         user_message = {"role": "user", "content": user_input.text}
-        if self.entry.options.get(CONF_ATTACH_USERNAME, DEFAULT_ATTACH_USERNAME):
+        config = get_model_config(self.entry)
+        if config["attach_username"]:
             user = user_input.context.user_id
             if user is not None:
                 user_message[ATTR_NAME] = user
@@ -389,7 +392,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
     def _generate_system_message(
         self, exposed_entities, user_input: conversation.ConversationInput
     ):
-        raw_prompt = self.entry.options.get(CONF_PROMPT, DEFAULT_PROMPT)
+        config = get_model_config(self.entry)
+        raw_prompt = config["prompt"]
         prompt = self._async_generate_prompt(raw_prompt, exposed_entities, user_input)
         return {"role": "system", "content": prompt}
 
@@ -476,7 +480,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             - heat
         ```
         """
-        domain_keywords = self.entry.options.get(CONF_DOMAIN_KEYWORDS, DEFAULT_DOMAIN_KEYWORDS)
+        config = get_model_config(self.entry)
+        domain_keywords = config["domain_keywords"]
         if not domain_keywords:
             return {}
             
@@ -581,7 +586,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
 
     def get_functions(self):
         try:
-            function = self.entry.options.get(CONF_FUNCTIONS)
+            config = get_model_config(self.entry)
+            function = config["functions"]
             result = yaml.safe_load(function) if function else DEFAULT_CONF_FUNCTIONS
             if result:
                 for setting in result:
@@ -601,9 +607,8 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         self, messages, exposed_entities, user_input: conversation.ConversationInput
     ):
         """Truncate message history."""
-        strategy = self.entry.options.get(
-            CONF_CONTEXT_TRUNCATE_STRATEGY, DEFAULT_CONTEXT_TRUNCATE_STRATEGY
-        )
+        config = get_model_config(self.entry)
+        strategy = config["context_truncate_strategy"]
 
         if strategy == "clear":
             last_user_message_index = None
@@ -627,29 +632,17 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         n_requests,
     ) -> OpenAIQueryResponse:
         """Process a sentence."""
-        model = self.entry.options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)
-        # Ensure max_tokens is always an integer. Dynamic preset NumberSelector may yield floats (e.g. 150.0)
-        max_tokens_opt = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
-        try:
-            max_tokens = int(max_tokens_opt)
-        except (TypeError, ValueError):
-            try:
-                max_tokens = int(float(max_tokens_opt))
-            except (TypeError, ValueError):
-                max_tokens = int(DEFAULT_MAX_TOKENS)
-        top_p = self.entry.options.get(CONF_TOP_P, DEFAULT_TOP_P)
-        temperature = self.entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
-        use_tools = self.entry.options.get(CONF_USE_TOOLS, DEFAULT_USE_TOOLS)
-        context_threshold = self.entry.options.get(
-            CONF_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_THRESHOLD
-        )
+        config = get_model_config(self.entry)
+        model = config["model"]
+        max_tokens = config["max_tokens"]
+        top_p = config["top_p"]
+        temperature = config["temperature"]
+        use_tools = config["use_tools"]
+        context_threshold = config["context_threshold"]
         functions = list(map(lambda s: s["spec"], self.get_functions()))
 
         function_call = "auto"
-        if n_requests == self.entry.options.get(
-            CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
-            DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
-        ):
+        if n_requests == config["max_function_calls"]:
             function_call = "none"
 
         tool_kwargs = {"functions": functions, "function_call": function_call}
@@ -692,7 +685,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         # Optional reasoning parameter mapping if preset declares reasoning_effort
         reasoning_kwargs: dict[str, Any] = {}
         if "reasoning_effort" in preset_param_names:
-            effort = self.entry.options.get("reasoning_effort")
+            effort = config["reasoning_effort"]
             if effort:
                 reasoning_kwargs = {"reasoning": {"effort": effort}}
         

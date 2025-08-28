@@ -1,19 +1,19 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from datetime import timedelta
 from functools import partial
+import asyncio
+import json
 import logging
 import os
-import re
+import tempfile
 import sqlite3
 import time
 from typing import Any
-from urllib import parse
-import json
-import glob
 import yaml
-
 from bs4 import BeautifulSoup
-from openai import AsyncAzureOpenAI, AsyncOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AuthenticationError, OpenAIError
 import voluptuous as vol
 import yaml
 
@@ -40,6 +40,7 @@ from homeassistant.const import (
     CONF_VERIFY_SSL,
     SERVICE_RELOAD,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 from homeassistant.helpers import config_validation as cv
@@ -420,6 +421,165 @@ def build_sampler_kwargs(
             sampler_kwargs["top_p"] = top_p
     
     return sampler_kwargs
+
+
+def get_model_config(entry: ConfigEntry) -> dict[str, Any]:
+    """Get model configuration from config entry options with defaults.
+    
+    Args:
+        entry: The config entry containing user options
+        
+    Returns:
+        Dictionary containing all model configuration parameters
+    """
+    from .const import (
+        CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL,
+        CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS,
+        CONF_TEMPERATURE, DEFAULT_TEMPERATURE,
+        CONF_TOP_P, DEFAULT_TOP_P,
+        CONF_USE_TOOLS, DEFAULT_USE_TOOLS,
+        CONF_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_THRESHOLD,
+        CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION, DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
+        CONF_ATTACH_USERNAME, DEFAULT_ATTACH_USERNAME,
+        CONF_PROMPT, DEFAULT_PROMPT,
+        CONF_DOMAIN_KEYWORDS, DEFAULT_DOMAIN_KEYWORDS,
+        CONF_CONTEXT_TRUNCATE_STRATEGY, DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+        CONF_FUNCTIONS,
+        CONF_ENABLE_STT,
+    )
+    
+    # Get max_tokens with proper type conversion
+    max_tokens_opt = entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
+    try:
+        max_tokens = int(max_tokens_opt)
+    except (TypeError, ValueError):
+        try:
+            max_tokens = int(float(max_tokens_opt))
+        except (TypeError, ValueError):
+            max_tokens = int(DEFAULT_MAX_TOKENS)
+    
+    return {
+        "model": entry.options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
+        "max_tokens": max_tokens,
+        "temperature": entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE),
+        "top_p": entry.options.get(CONF_TOP_P, DEFAULT_TOP_P),
+        "use_tools": entry.options.get(CONF_USE_TOOLS, DEFAULT_USE_TOOLS),
+        "context_threshold": entry.options.get(CONF_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_THRESHOLD),
+        "max_function_calls": entry.options.get(
+            CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION, 
+            DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION
+        ),
+        "attach_username": entry.options.get(CONF_ATTACH_USERNAME, DEFAULT_ATTACH_USERNAME),
+        "prompt": entry.options.get(CONF_PROMPT, DEFAULT_PROMPT),
+        "domain_keywords": entry.options.get(CONF_DOMAIN_KEYWORDS, DEFAULT_DOMAIN_KEYWORDS),
+        "context_truncate_strategy": entry.options.get(
+            CONF_CONTEXT_TRUNCATE_STRATEGY, 
+            DEFAULT_CONTEXT_TRUNCATE_STRATEGY
+        ),
+        "functions": entry.options.get(CONF_FUNCTIONS),
+        "enable_stt": entry.options.get(CONF_ENABLE_STT),
+        "reasoning_effort": entry.options.get("reasoning_effort"),
+    }
+
+
+def read_json_file(file_path: str) -> dict | list | None:
+    """Read and parse a JSON file.
+    
+    Args:
+        file_path: Path to the JSON file
+        
+    Returns:
+        Parsed JSON data or None if file doesn't exist or is invalid
+    """
+    if not os.path.exists(file_path):
+        return None
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.loads(f.read())
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
+def write_json_file(file_path: str, data: dict | list) -> None:
+    """Write data to a JSON file.
+    
+    Args:
+        file_path: Path to the JSON file
+        data: Data to write
+    """
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+        f.flush()
+
+
+def read_yaml_file(file_path: str) -> dict | None:
+    """Read and parse a YAML file.
+    
+    Args:
+        file_path: Path to the YAML file
+        
+    Returns:
+        Parsed YAML data or None if file doesn't exist or is invalid
+    """
+    if not os.path.exists(file_path):
+        return None
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f) or {}
+    except (yaml.YAMLError, IOError):
+        return None
+
+
+def write_yaml_file(file_path: str, data: dict, append: bool = False) -> None:
+    """Write data to a YAML file.
+    
+    Args:
+        file_path: Path to the YAML file
+        data: Data to write
+        append: Whether to append to existing file
+    """
+    mode = 'a' if append else 'w'
+    with open(file_path, mode, encoding='utf-8') as f:
+        raw_config = yaml.dump(data, allow_unicode=True, sort_keys=False)
+        if append:
+            f.write('\n' + raw_config)
+        else:
+            f.write(raw_config)
+
+
+def handle_api_error(err: Exception, operation: str, logger) -> None:
+    """Standardized API error handling and logging.
+    
+    Args:
+        err: The exception that occurred
+        operation: Description of the operation that failed
+        logger: Logger instance to use for logging
+    """
+    if isinstance(err, AuthenticationError):
+        logger.error("Authentication failed for %s: %s", operation, err)
+    elif isinstance(err, OpenAIError):
+        logger.error("OpenAI API error during %s: %s", operation, err)
+    else:
+        logger.error("Unexpected error during %s: %s", operation, err)
+
+
+def handle_file_error(err: Exception, file_path: str, operation: str, logger) -> None:
+    """Standardized file operation error handling and logging.
+    
+    Args:
+        err: The exception that occurred
+        file_path: Path to the file that caused the error
+        operation: Description of the operation that failed
+        logger: Logger instance to use for logging
+    """
+    if isinstance(err, FileNotFoundError):
+        logger.warning("File not found during %s: %s", operation, file_path)
+    elif isinstance(err, PermissionError):
+        logger.error("Permission denied during %s: %s", operation, file_path)
+    elif isinstance(err, (json.JSONDecodeError, yaml.YAMLError)):
+        logger.error("Invalid file format during %s: %s - %s", operation, file_path, err)
+    else:
+        logger.error("File operation error during %s: %s - %s", operation, file_path, err)
 
 
 def convert_to_template(
