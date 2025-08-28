@@ -22,5 +22,5 @@
     "openai~=1.99.1"
   ],
   "platforms": ["stt", "ai_task"],
-  "version": "1.3.6"
+  "version": "1.3.7"
 }
