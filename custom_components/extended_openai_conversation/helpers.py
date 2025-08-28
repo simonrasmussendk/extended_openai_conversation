@@ -238,28 +238,49 @@ def resolve_token_parameters(
     # Heuristic for GPT-5 style backends
     is_gpt5 = "gpt-5" in str(model).lower()
     
+    # Import logger (moved to top of function for efficiency)
+    import logging
+    _LOGGER = logging.getLogger(__name__)
+    
     # Choose token parameter name: cache -> preset -> heuristic
     token_param_name = None
     if token_param_cache:
-        token_param_name = token_param_cache.get(str(model))
+        cached_param = token_param_cache.get(str(model))
+        # Only use cached value if it matches what the preset expects
+        if cached_param and cached_param in preset_param_names:
+            token_param_name = cached_param
+        elif cached_param:
+            _LOGGER.debug("Ignoring cached param %s as it's not in preset params", cached_param)
     
     if not token_param_name:
-        if "max_completion_tokens" in preset_param_names:
+        # Check preset parameters first - prioritize max_tokens for non-GPT5 models
+        if not is_gpt5 and "max_tokens" in preset_param_names:
+            token_param_name = "max_tokens"
+        elif is_gpt5 and "max_completion_tokens" in preset_param_names:
+            token_param_name = "max_completion_tokens"
+        elif "max_completion_tokens" in preset_param_names:
             token_param_name = "max_completion_tokens"
         elif "max_tokens" in preset_param_names:
             token_param_name = "max_tokens"
         else:
+            # Default fallback based on model type
             token_param_name = "max_completion_tokens" if is_gpt5 else "max_tokens"
     
-    # Enforce optional preset limits by clamping
+    # Enforce optional preset limits by clamping and ensure integer type
     final_max_tokens = max_tokens
     if token_param_name in limits:
         try:
             limit_val = int(limits[token_param_name])
-            if isinstance(max_tokens, int) and max_tokens > limit_val:
+            if isinstance(max_tokens, (int, float)) and max_tokens > limit_val:
                 final_max_tokens = limit_val
         except Exception:
             pass
+    
+    # Ensure final_max_tokens is always an integer
+    try:
+        final_max_tokens = int(final_max_tokens)
+    except (TypeError, ValueError):
+        final_max_tokens = int(max_tokens) if max_tokens else 150
     
     return {token_param_name: final_max_tokens}, token_param_name
 

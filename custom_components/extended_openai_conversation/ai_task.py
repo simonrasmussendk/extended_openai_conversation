@@ -188,6 +188,11 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
             custom_params = get_custom_parameters(agent.entry, preset)
             custom_sampler, custom_reasoning, custom_tool, custom_base = distribute_custom_parameters(custom_params)
             
+            
+            # Remove any token parameters from custom parameters to avoid conflicts
+            custom_sampler = {k: v for k, v in custom_sampler.items() if k not in ['max_tokens', 'max_completion_tokens']}
+            custom_base = {k: v for k, v in custom_base.items() if k not in ['max_tokens', 'max_completion_tokens']}
+            
             # Merge custom sampler parameters with standard ones
             sampler_kwargs.update(custom_sampler)
 
@@ -348,13 +353,16 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
                     used_param = list(token_kwargs.keys())[0]
                     if used_param == "max_tokens":
                         try:
+                            # Use the alternative token parameter
+                            alt_param = "max_tokens" if token_param_name == "max_completion_tokens" else "max_completion_tokens"
+                            alt_token_value = list(token_kwargs.values())[0]  # Get the actual token value
                             resp_retry = await agent.client.chat.completions.create(
                                 **base_kwargs,
                                 **sampler_kwargs,
-                                **{"max_completion_tokens": max_tokens},
+                                **{alt_param: alt_token_value},
                             )
                             try:
-                                agent._token_param_cache[str(model)] = "max_completion_tokens"  # type: ignore[attr-defined]
+                                agent._token_param_cache[str(model)] = alt_param  # type: ignore[attr-defined]
                             except Exception:  # noqa: BLE001
                                 pass
                             resp = resp_retry
