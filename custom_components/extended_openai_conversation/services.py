@@ -31,6 +31,7 @@ from .helpers import (
     async_get_preset_for_model,
     get_param_names,
     get_limits,
+    resolve_token_parameters,
 )
 
 QUERY_IMAGE_SCHEMA = vol.Schema(
@@ -78,25 +79,18 @@ async def async_setup_services(hass: HomeAssistant, config: ConfigType) -> None:
 
             # Resolve preset and token parameter name with optional clamping (non-blocking)
             preset = await async_get_preset_for_model(hass, model)
-            preset_param_names = get_param_names(preset) if preset else set()
-            limits = get_limits(preset) if preset else {}
-
-            # Choose token parameter name: preset -> heuristic
-            if "max_completion_tokens" in preset_param_names:
-                token_param_name = "max_completion_tokens"
-            elif "max_tokens" in preset_param_names:
-                token_param_name = "max_tokens"
-            else:
-                token_param_name = "max_completion_tokens" if "gpt-5" in str(model).lower() else "max_tokens"
-
-            # Clamp based on preset limits when defined
-            max_tokens_val = call.data["max_tokens"]
-            limit_val = limits.get(token_param_name)
-            if isinstance(limit_val, int) and isinstance(max_tokens_val, int) and max_tokens_val > limit_val:
-                _LOGGER.debug("Clamping %s from %s to preset limit %s", token_param_name, max_tokens_val, limit_val)
-                max_tokens_val = limit_val
-
-            token_kwargs = {token_param_name: max_tokens_val}
+            
+            # Use centralized token parameter resolution
+            token_kwargs, token_param_name = resolve_token_parameters(
+                model=model,
+                max_tokens=call.data["max_tokens"],
+                preset=preset,
+            )
+            
+            # Log if clamping occurred
+            final_max_tokens = token_kwargs[token_param_name]
+            if final_max_tokens != call.data["max_tokens"]:
+                _LOGGER.debug("Clamped %s from %s to %s based on preset limit", token_param_name, call.data["max_tokens"], final_max_tokens)
 
             client = AsyncOpenAI(
                 api_key=hass.data[DOMAIN][call.data["config_entry"]]["api_key"]

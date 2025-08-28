@@ -214,6 +214,214 @@ def get_limits(preset: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def resolve_token_parameters(
+    model: str,
+    max_tokens: int,
+    preset: dict[str, Any] | None = None,
+    token_param_cache: dict[str, str] | None = None,
+) -> tuple[dict[str, int], str]:
+    """Resolve token parameter name and apply limits based on model and preset.
+    
+    Args:
+        model: The model name/identifier
+        max_tokens: The desired max tokens value
+        preset: Optional preset configuration
+        token_param_cache: Optional cache of previously resolved token parameters
+        
+    Returns:
+        Tuple of (token_kwargs_dict, token_param_name)
+    """
+    preset_param_names = get_param_names(preset) if preset else set()
+    limits = get_limits(preset) if preset else {}
+    
+    # Heuristic for GPT-5 style backends
+    is_gpt5 = "gpt-5" in str(model).lower()
+    
+    # Choose token parameter name: cache -> preset -> heuristic
+    token_param_name = None
+    if token_param_cache:
+        token_param_name = token_param_cache.get(str(model))
+    
+    if not token_param_name:
+        if "max_completion_tokens" in preset_param_names:
+            token_param_name = "max_completion_tokens"
+        elif "max_tokens" in preset_param_names:
+            token_param_name = "max_tokens"
+        else:
+            token_param_name = "max_completion_tokens" if is_gpt5 else "max_tokens"
+    
+    # Enforce optional preset limits by clamping
+    final_max_tokens = max_tokens
+    if token_param_name in limits:
+        try:
+            limit_val = int(limits[token_param_name])
+            if isinstance(max_tokens, int) and max_tokens > limit_val:
+                final_max_tokens = limit_val
+        except Exception:
+            pass
+    
+    return {token_param_name: final_max_tokens}, token_param_name
+
+
+async def execute_openai_request_with_fallbacks(
+    client,
+    model: str,
+    messages: list,
+    token_kwargs: dict[str, int],
+    sampler_kwargs: dict[str, Any] | None = None,
+    reasoning_kwargs: dict[str, Any] | None = None,
+    tool_kwargs: dict[str, Any] | None = None,
+    base_kwargs: dict[str, Any] | None = None,
+    token_param_cache: dict[str, str] | None = None,
+):
+    """Execute OpenAI API request with automatic fallbacks for unsupported parameters.
+    
+    Args:
+        client: The OpenAI client instance
+        model: Model name
+        messages: Chat messages
+        token_kwargs: Token parameter kwargs (e.g., {"max_tokens": 150})
+        sampler_kwargs: Optional sampler parameters (temperature, top_p)
+        reasoning_kwargs: Optional reasoning parameters
+        tool_kwargs: Optional tool/function parameters
+        base_kwargs: Optional base parameters
+        token_param_cache: Optional cache to update on successful parameter discovery
+        
+    Returns:
+        OpenAI API response object
+    """
+    sampler_kwargs = sampler_kwargs or {}
+    reasoning_kwargs = reasoning_kwargs or {}
+    tool_kwargs = tool_kwargs or {}
+    base_kwargs = base_kwargs or {}
+    
+    # Prepare full request kwargs
+    request_kwargs = {
+        "model": model,
+        "messages": messages,
+        **base_kwargs,
+        **token_kwargs,
+        **sampler_kwargs,
+        **reasoning_kwargs,
+        **tool_kwargs,
+    }
+    
+    try:
+        # First attempt with all parameters
+        return await client.chat.completions.create(**request_kwargs)
+    except Exception as err:
+        err_str = str(err)
+        
+        # Helper functions for error detection
+        def _is_unsupported(param: str) -> bool:
+            return "Unsupported parameter" in err_str and f"'{param}'" in err_str
+        
+        def _is_unsupported_value(param: str) -> bool:
+            return "Unsupported value" in err_str and f"'{param}'" in err_str
+        
+        def _is_unexpected_kwarg(param: str) -> bool:
+            return (isinstance(err, TypeError) and 
+                    (f"unexpected keyword argument '{param}'" in err_str or
+                     f"got an unexpected keyword argument '{param}'" in err_str))
+        
+        # Handle reasoning parameter issues first
+        if (_is_unsupported("reasoning") or _is_unsupported_value("reasoning") or 
+            _is_unexpected_kwarg("reasoning")):
+            request_kwargs.pop("reasoning", None)
+            try:
+                return await client.chat.completions.create(**request_kwargs)
+            except Exception:
+                pass  # Continue to other fallbacks
+        
+        # Handle response_format issues
+        if (_is_unsupported("response_format") or _is_unsupported_value("response_format") or 
+            _is_unexpected_kwarg("response_format")):
+            request_kwargs.pop("response_format", None)
+            try:
+                return await client.chat.completions.create(**request_kwargs)
+            except Exception:
+                pass  # Continue to other fallbacks
+        
+        # Handle token parameter issues
+        current_token_param = list(token_kwargs.keys())[0] if token_kwargs else None
+        if current_token_param and _is_unsupported(current_token_param):
+            alt_param = "max_tokens" if current_token_param == "max_completion_tokens" else "max_completion_tokens"
+            token_value = token_kwargs[current_token_param]
+            
+            # Remove old token param and add alternative
+            request_kwargs.pop(current_token_param, None)
+            request_kwargs[alt_param] = token_value
+            
+            try:
+                response = await client.chat.completions.create(**request_kwargs)
+                # Update cache on success
+                if token_param_cache is not None:
+                    token_param_cache[str(model)] = alt_param
+                return response
+            except Exception:
+                pass  # Continue to other fallbacks
+        
+        # Handle temperature parameter issues
+        if (_is_unsupported("temperature") or _is_unsupported_value("temperature")):
+            request_kwargs.pop("temperature", None)
+            try:
+                return await client.chat.completions.create(**request_kwargs)
+            except Exception as err2:
+                # If top_p also fails, remove it too
+                err2_str = str(err2)
+                if (_is_unsupported("top_p") or 
+                    ("'top_p'" in err2_str and ("Unsupported parameter" in err2_str or "Unsupported value" in err2_str))):
+                    request_kwargs.pop("top_p", None)
+                    return await client.chat.completions.create(**request_kwargs)
+                raise
+        
+        # Handle top_p parameter issues
+        if (_is_unsupported("top_p") or _is_unsupported_value("top_p")):
+            request_kwargs.pop("top_p", None)
+            return await client.chat.completions.create(**request_kwargs)
+        
+        # If no specific fallback worked, re-raise the original error
+        raise
+
+
+def build_sampler_kwargs(
+    model: str,
+    temperature: float,
+    top_p: float,
+    preset: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build sampler kwargs respecting model constraints.
+    
+    Args:
+        model: The model name/identifier
+        temperature: Temperature value
+        top_p: Top-p value
+        preset: Optional preset configuration
+        
+    Returns:
+        Dictionary of sampler parameters to include in API request
+    """
+    preset_param_names = get_param_names(preset) if preset else set()
+    is_gpt5 = "gpt-5" in str(model).lower()
+    
+    sampler_kwargs: dict[str, Any] = {}
+    
+    if is_gpt5:
+        # Some GPT-5 variants only allow default sampler values; omit non-defaults to prevent 400
+        if "temperature" in preset_param_names and temperature == 1:
+            sampler_kwargs["temperature"] = temperature
+        if "top_p" in preset_param_names and top_p == 1:
+            sampler_kwargs["top_p"] = top_p
+    else:
+        # For non-GPT-5 models, include parameters if they're in the preset or no preset exists
+        if not preset or "temperature" in preset_param_names:
+            sampler_kwargs["temperature"] = temperature
+        if not preset or "top_p" in preset_param_names:
+            sampler_kwargs["top_p"] = top_p
+    
+    return sampler_kwargs
+
+
 def convert_to_template(
     settings,
     template_keys=["data", "event_data", "target", "service"],
@@ -266,6 +474,31 @@ def _get_rest_data(hass, rest_config, arguments):
     return rest.create_rest_data_from_config(hass, rest_config)
 
 
+def create_openai_client(
+    hass: HomeAssistant,
+    api_key: str,
+    base_url: str | None = None,
+    api_version: str | None = None,
+    organization: str | None = None,
+) -> AsyncOpenAI | AsyncAzureOpenAI:
+    """Create an OpenAI client (Azure or standard) with consistent configuration."""
+    if is_azure(base_url):
+        return AsyncAzureOpenAI(
+            api_key=api_key,
+            azure_endpoint=base_url,
+            api_version=api_version,
+            organization=organization,
+            http_client=get_async_client(hass),
+        )
+    else:
+        return AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            organization=organization,
+            http_client=get_async_client(hass),
+        )
+
+
 async def validate_authentication(
     hass: HomeAssistant,
     api_key: str,
@@ -277,22 +510,7 @@ async def validate_authentication(
     if skip_authentication:
         return
 
-    if is_azure(base_url):
-        client = AsyncAzureOpenAI(
-            api_key=api_key,
-            azure_endpoint=base_url,
-            api_version=api_version,
-            organization=organization,
-            http_client=get_async_client(hass),
-        )
-    else:
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            organization=organization,
-            http_client=get_async_client(hass),
-        )
-
+    client = create_openai_client(hass, api_key, base_url, api_version, organization)
     await hass.async_add_executor_job(partial(client.models.list, timeout=10))
 
 

@@ -35,6 +35,8 @@ from .helpers import (
     get_param_names,
     get_limits,
     log_openai_interaction,
+    resolve_token_parameters,
+    build_sampler_kwargs,
 )
 from . import DATA_AGENT  # hass.data key set in __init__
 
@@ -162,41 +164,23 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
             is_gpt5 = "gpt-5" in str(model).lower()
             preset = await async_get_preset_for_model(self.hass, model)
             preset_param_names = get_param_names(preset) if preset else set()
-            limits = get_limits(preset) if preset else {}
 
-            # Choose token parameter name: prefer agent cache -> preset -> heuristic
-            token_param_name = getattr(agent, "_token_param_cache", {}).get(str(model))
-            if not token_param_name:
-                if "max_completion_tokens" in preset_param_names:
-                    token_param_name = "max_completion_tokens"
-                elif "max_tokens" in preset_param_names:
-                    token_param_name = "max_tokens"
-                else:
-                    token_param_name = "max_completion_tokens" if is_gpt5 else "max_tokens"
+            # Use centralized token parameter resolution
+            agent_cache = getattr(agent, "_token_param_cache", {})
+            token_kwargs, token_param_name = resolve_token_parameters(
+                model=model,
+                max_tokens=max_tokens,
+                preset=preset,
+                token_param_cache=agent_cache,
+            )
 
-            # Optional clamping to preset limits
-            if token_param_name in limits:
-                try:
-                    limit_val = int(limits[token_param_name])
-                    if isinstance(max_tokens, int) and max_tokens > limit_val:
-                        max_tokens = limit_val
-                except Exception:  # noqa: BLE001
-                    pass
-            token_kwargs = {token_param_name: max_tokens}
-
-            # Build sampler kwargs respecting model constraints
-            sampler_kwargs: dict[str, Any] = {}
-            if is_gpt5:
-                # Some GPT-5 variants only allow default sampler values; omit non-defaults to prevent 400
-                if "temperature" in preset_param_names and temperature == 1:
-                    sampler_kwargs["temperature"] = temperature
-                if "top_p" in preset_param_names and top_p == 1:
-                    sampler_kwargs["top_p"] = top_p
-            else:
-                if "temperature" in preset_param_names:
-                    sampler_kwargs["temperature"] = temperature
-                if "top_p" in preset_param_names:
-                    sampler_kwargs["top_p"] = top_p
+            # Build sampler kwargs using centralized logic
+            sampler_kwargs = build_sampler_kwargs(
+                model=model,
+                temperature=temperature,
+                top_p=top_p,
+                preset=preset,
+            )
 
             # Optional reasoning mapping if preset declares reasoning_effort
             reasoning_kwargs: dict[str, Any] = {}

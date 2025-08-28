@@ -26,7 +26,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.httpx_client import get_async_client
 
-from .helpers import is_azure
+from .helpers import is_azure, create_openai_client
 from homeassistant.const import CONF_API_KEY
 from .const import (
     CONF_API_VERSION,
@@ -142,27 +142,13 @@ class ExtendedOpenAISttProvider(Provider):
         if self._client is not None:
             return
 
-        base_url = self._base_url or None
-        api_key = self._api_key
-        organization = self._organization or None
-        api_version = self._api_version or None
-        http_client = get_async_client(self.hass)
-
-        if is_azure(base_url):
-            self._client = AsyncAzureOpenAI(
-                api_key=api_key,
-                azure_endpoint=base_url,
-                api_version=api_version,
-                organization=organization,
-                http_client=http_client,
-            )
-        else:
-            self._client = AsyncOpenAI(
-                api_key=api_key,
-                base_url=base_url,
-                organization=organization,
-                http_client=http_client,
-            )
+        self._client = create_openai_client(
+            hass=self.hass,
+            api_key=self._api_key,
+            base_url=self._base_url,
+            api_version=self._api_version,
+            organization=self._organization,
+        )
 
     # Provider interface
     @property
