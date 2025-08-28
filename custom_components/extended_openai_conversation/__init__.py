@@ -156,6 +156,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data[DATA_AGENT] = agent
     # Track whether we actually forwarded the STT platform for this entry
     data.setdefault("stt_loaded", False)
+    # Track whether we forwarded the AI Task platform for this entry
+    data.setdefault("ai_task_loaded", False)
 
     conversation.async_set_agent(hass, entry, agent)
 
@@ -170,6 +172,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:  # noqa: BLE001
         _LOGGER.error("Failed to set up STT platform: %s", err)
 
+    # Forward AI Task platform setup (always enabled if platform available)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, ["ai_task"])
+        data["ai_task_loaded"] = True
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Failed to set up AI Task platform: %s", err)
+
     return True
 
 
@@ -183,6 +192,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry_data["stt_loaded"] = False
     except Exception as err:  # noqa: BLE001
         _LOGGER.warning("Failed to unload STT platform cleanly: %s", err)
+
+    # Unload AI Task platform only if we had set it up for this entry
+    try:
+        if entry_data.get("ai_task_loaded"):
+            await hass.config_entries.async_unload_platforms(entry, ["ai_task"])
+            entry_data["ai_task_loaded"] = False
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Failed to unload AI Task platform cleanly: %s", err)
 
     hass.data[DOMAIN].pop(entry.entry_id)
     conversation.async_unset_agent(hass, entry)

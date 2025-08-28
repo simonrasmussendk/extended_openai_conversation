@@ -15,6 +15,7 @@ Derived from [OpenAI Conversation](https://www.home-assistant.io/integrations/op
 - Option to pass the current user's name to OpenAI via the user message context
 - Area support: entity areas are included in the prompt, along with a list of all available areas
 - Add or override models without editing integration files (see section below)
+ - AI Task entity for structured data generation and image generation (Home Assistant "AI Task" platform)
 
 ## Add or override models
 
@@ -375,6 +376,156 @@ logger:
 - __Model selection__: Choose the chat model in the integration Options. Built‑in presets include `gpt-4o-mini` and `gpt-5-mini`.
 - __Token handling__: The integration automatically uses `max_tokens` or `max_completion_tokens` depending on the model and will retry if the server prefers the other.
 - __Reasoning effort__: If a preset declares `reasoning_effort`, you can set it to `minimal`, `low`, `medium`, or `high`. If the server/SDK does not support the `reasoning` parameter, the integration automatically drops it and retries.
+
+## AI Task: Structured data generation
+
+Use Developer Tools → Actions → `ai_task.generate_data` to ask the model to produce JSON. Provide a `structure` object as guidance (selectors-style object); the integration:
+
+- __Serializes__ your `structure` safely for the prompt
+- __Requests strict JSON__ output and parses the response
+- __Falls back__ by dropping `response_format` if the endpoint doesn’t support it
+- __Swaps token params__ (`max_tokens` ↔ `max_completion_tokens`) on length cutoffs
+- __Gates sampler params__ (`temperature`, `top_p`) to only send what the preset/model supports
+- __Returns structured errors__ instead of raising unhelpful exceptions
+
+Examples (paste into Developer Tools → Actions(yaml mode)):
+_Replace `<your_ai_task_entity_id>` with your AI Task entity (e.g., `ai_task.openai_ai_task`)._
+
+1) Lighting scene configuration (use with scene.create or a script)
+```yaml
+service: ai_task.generate_data
+data:
+  entity_id: <your_ai_task_entity_id>
+  task_name: lighting_scene_config
+  instructions: >
+    Produce a JSON object that can be used to create or apply a lighting scene.
+    Include:
+    - scene_name (string)
+    - area (string)
+    - brightness (number 1-255)
+    - color_temp_mireds (number 153-500)
+    - transition_seconds (number 0-60)
+    - entities (array of entity_id strings)
+  structure:
+    scene_name:
+      description: "Scene name"
+      required: true
+      selector:
+        text:
+    area:
+      description: "Area name"
+      required: true
+      selector:
+        text:
+    brightness:
+      description: "1-255"
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 255
+          step: 1
+    color_temp_mireds:
+      description: "153-500"
+      required: true
+      selector:
+        number:
+          min: 153
+          max: 500
+          step: 1
+    transition_seconds:
+      description: "0-60"
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 1
+    entities:
+      description: "Array of light entity_ids"
+      required: true
+      selector:
+        text:
+```
+
+2) Irrigation schedule (for use with an automation/script)
+```yaml
+service: ai_task.generate_data
+data:
+  entity_id: <your_ai_task_entity_id>
+  task_name: irrigation_schedule
+  instructions: >
+    Create a JSON schedule for garden irrigation with:
+    - schedule_name (string)
+    - start_time (string, HH:MM 24h)
+    - zones (array of objects) where each has:
+      entity_id (string), duration_min (number)
+    - skip_if_rain_mm (number 0-20)
+  structure:
+    schedule_name:
+      description: "Name of schedule"
+      required: true
+      selector:
+        text:
+    start_time:
+      description: "HH:MM 24h"
+      required: true
+      selector:
+        text:
+    zones:
+      description: "Array of {entity_id, duration_min}"
+      required: true
+      selector:
+        text:
+    skip_if_rain_mm:
+      description: "Rain threshold in mm"
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 1
+```
+
+3) Mobile notification payload (for notify.* services)
+```yaml
+service: ai_task.generate_data
+data:
+  entity_id: <your_ai_task_entity_id>
+  task_name: mobile_notification_payload
+  instructions: >
+    Produce a JSON object for a high-quality mobile notification with:
+    - title (string)
+    - message (string)
+    - priority (string: "low" | "normal" | "high")
+    - tag (string)
+  structure:
+    title:
+      description: "Notification title"
+      required: true
+      selector:
+        text:
+    message:
+      description: "Notification message"
+      required: true
+      selector:
+        text:
+    priority:
+      description: "Notification priority"
+      required: true
+      selector:
+        select:
+          options: [low, normal, high]
+    tag:
+      description: "Notification tag"
+      required: false
+      selector:
+        text:
+```
+
+Tips
+- If your endpoint rejects unknown parameters, the integration will auto-drop `reasoning` and/or `response_format` and retry.
+- If you prefer raw JSON text without parsing, omit `structure` and ask the model to “return only JSON”; the `data` field will contain the string.
 
 ## Add or override models
 
