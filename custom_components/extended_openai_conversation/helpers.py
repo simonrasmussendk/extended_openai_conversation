@@ -434,28 +434,27 @@ async def execute_openai_request_with_fallbacks(
         messages: Chat messages
         token_kwargs: Token parameter kwargs (e.g., {"max_tokens": 150})
         sampler_kwargs: Optional sampler parameters (temperature, top_p)
-        reasoning_kwargs: Optional reasoning parameters
         tool_kwargs: Optional tool/function parameters
-        base_kwargs: Optional base parameters
+        custom_kwargs: Optional custom parameters (reasoning, base, etc.)
+        token_param_name: Name of the token parameter being used
+        logger: Logger instance
         token_param_cache: Optional cache to update on successful parameter discovery
         
     Returns:
         OpenAI API response object
     """
     sampler_kwargs = sampler_kwargs or {}
-    reasoning_kwargs = reasoning_kwargs or {}
     tool_kwargs = tool_kwargs or {}
-    base_kwargs = base_kwargs or {}
+    custom_kwargs = custom_kwargs or {}
     
-    # Prepare full request kwargs
+    # Merge all parameters for the request
     request_kwargs = {
         "model": model,
         "messages": messages,
-        **base_kwargs,
         **token_kwargs,
         **sampler_kwargs,
-        **reasoning_kwargs,
         **tool_kwargs,
+        **custom_kwargs,
     }
     
     try:

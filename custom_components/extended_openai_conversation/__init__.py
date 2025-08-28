@@ -676,7 +676,9 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         # Log if clamping occurred
         final_max_tokens = token_kwargs[token_param_name]
         if final_max_tokens != max_tokens:
-            _LOGGER.debug("Clamped %s from %s to %s based on preset limit", token_param_name, max_tokens, final_max_tokens)
+            _LOGGER.warning("Clamped %s from %s to %s based on preset limit - check your model preset configuration", token_param_name, max_tokens, final_max_tokens)
+        
+        _LOGGER.debug("Using token parameter %s=%s for model %s", token_param_name, final_max_tokens, model)
         
         # Build sampler kwargs using centralized logic
         sampler_kwargs = build_sampler_kwargs(
@@ -735,9 +737,10 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                             messages=messages,
                             token_kwargs=token_kwargs,
                             sampler_kwargs=sampler_kwargs,
-                            reasoning_kwargs=reasoning_kwargs,
                             tool_kwargs={**tool_kwargs, **custom_tool},
-                            base_kwargs={"user": user_input.conversation_id, **custom_base},
+                            custom_kwargs={**reasoning_kwargs, "user": user_input.conversation_id, **custom_base},
+                            token_param_name=token_param_name,
+                            logger=_LOGGER,
                             token_param_cache=self._token_param_cache,
                         )
                     )
@@ -813,8 +816,6 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             if choice.finish_reason == "length":
                 # If swap fails at transport level, surface the original condition
                 raise TokenLengthExceededError(response.usage.completion_tokens)
-        else:
-            raise TokenLengthExceededError(response.usage.completion_tokens)
 
         return OpenAIQueryResponse(response=response, message=message)
 
