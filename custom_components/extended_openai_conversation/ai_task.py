@@ -39,6 +39,8 @@ from .helpers import (
     build_sampler_kwargs,
     get_custom_parameters,
     distribute_custom_parameters,
+    get_preferred_token_param,
+    extract_and_validate_model_params,
 )
 from . import DATA_AGENT  # hass.data key set in __init__
 
@@ -147,23 +149,15 @@ class ExtendedOpenAIAITaskEntity(AITaskEntity):
 
         # Read parameters and prepare request; surface errors instead of raising
         try:
-            # Read parameters from options
+            # Read parameters from options using centralized function
             opts = {**self.entry.options}
-            model = opts.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)
-            # Ensure int for max tokens
-            max_tokens_opt = opts.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
-            try:
-                max_tokens = int(max_tokens_opt)
-            except (TypeError, ValueError):
-                try:
-                    max_tokens = int(float(max_tokens_opt))
-                except (TypeError, ValueError):
-                    max_tokens = int(DEFAULT_MAX_TOKENS)
-            temperature = opts.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
-            top_p = opts.get(CONF_TOP_P, DEFAULT_TOP_P)
+            params = extract_and_validate_model_params(opts)
+            model = params["model"]
+            max_tokens = params["max_tokens"]
+            temperature = params["temperature"]
+            top_p = params["top_p"]
 
-            # Derive parameter behavior from preset and model heuristics
-            is_gpt5 = "gpt-5" in str(model).lower()
+            # Get preset for dynamic parameter behavior
             preset = await async_get_preset_for_model(self.hass, model)
             preset_param_names = get_param_names(preset) if preset else set()
 

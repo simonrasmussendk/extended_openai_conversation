@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 import sqlite3
 import time
@@ -85,6 +86,98 @@ def is_azure(base_url: str):
     if base_url and re.search(AZURE_DOMAIN_PATTERN, base_url):
         return True
     return False
+
+
+def get_preferred_token_param(preset: dict[str, Any] | None) -> str:
+    """Get the preferred token parameter name from preset configuration.
+    
+    Args:
+        preset: Model preset configuration
+        
+    Returns:
+        The preferred token parameter name ('max_tokens' or 'max_completion_tokens')
+    """
+    if not preset:
+        return "max_tokens"  # Default fallback
+    
+    # Check which token parameter is defined in the preset
+    param_names = get_param_names(preset)
+    if "max_completion_tokens" in param_names:
+        return "max_completion_tokens"
+    elif "max_tokens" in param_names:
+        return "max_tokens"
+    
+    # Fallback: check limits section
+    limits = get_limits(preset)
+    if "max_completion_tokens" in limits:
+        return "max_completion_tokens"
+    elif "max_tokens" in limits:
+        return "max_tokens"
+    
+    return "max_tokens"  # Default fallback
+
+
+class ModelCapabilities:
+    """Centralized model-specific logic and capabilities based on presets."""
+    
+    def __init__(self, model: str, preset: dict[str, Any] | None = None):
+        self.model = model
+        self.preset = preset
+        self._preset_param_names = get_param_names(preset) if preset else set()
+    
+    @property
+    def supports_vision(self) -> bool:
+        """Check if the model supports vision/image inputs."""
+        vision_models = {"gpt-4-vision-preview", "gpt-4o", "gpt-4o-mini"}
+        return any(vm in self.model.lower() for vm in vision_models)
+    
+    @property
+    def preferred_token_param(self) -> str:
+        """Get the preferred token parameter name based on preset."""
+        return get_preferred_token_param(self.preset)
+    
+    def should_include_sampler_param(self, param_name: str, value: Any, default_value: Any) -> bool:
+        """Determine if a sampler parameter should be included based on preset."""
+        # If no preset, include all standard parameters
+        if not self.preset:
+            return param_name in {"temperature", "top_p"}
+        
+        # Only include parameters that are defined in the preset
+        return param_name in self._preset_param_names
+
+
+def extract_and_validate_model_params(options: dict) -> dict:
+    """Extract and validate model parameters from config options.
+    
+    Args:
+        options: Dictionary of configuration options
+        
+    Returns:
+        Dictionary containing validated model parameters
+    """
+    from .const import (
+        CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL,
+        CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS,
+        CONF_TEMPERATURE, DEFAULT_TEMPERATURE,
+        CONF_TOP_P, DEFAULT_TOP_P,
+    )
+    
+    # Extract and validate max_tokens with proper type conversion
+    max_tokens_opt = options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
+    try:
+        max_tokens = int(max_tokens_opt)
+    except (TypeError, ValueError):
+        try:
+            max_tokens = int(float(max_tokens_opt))
+        except (TypeError, ValueError):
+            max_tokens = int(DEFAULT_MAX_TOKENS)
+    
+    return {
+        "model": options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
+        "max_tokens": max_tokens,
+        "temperature": options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE),
+        "top_p": options.get(CONF_TOP_P, DEFAULT_TOP_P),
+    }
 
 
 # -----------------------------
@@ -235,36 +328,26 @@ def resolve_token_parameters(
     preset_param_names = get_param_names(preset) if preset else set()
     limits = get_limits(preset) if preset else {}
     
-    # Heuristic for GPT-5 style backends
-    is_gpt5 = "gpt-5" in str(model).lower()
+    # Get preferred token parameter from preset
+    preferred_token_param = get_preferred_token_param(preset)
     
     # Import logger (moved to top of function for efficiency)
     import logging
     _LOGGER = logging.getLogger(__name__)
     
-    # Choose token parameter name: cache -> preset -> heuristic
+    # Choose token parameter name: cache -> preset -> default
     token_param_name = None
     if token_param_cache:
         cached_param = token_param_cache.get(str(model))
         # Only use cached value if it matches what the preset expects
-        if cached_param and cached_param in preset_param_names:
+        if cached_param and (
+            not preset or cached_param in preset_param_names
+        ):
             token_param_name = cached_param
-        elif cached_param:
-            _LOGGER.debug("Ignoring cached param %s as it's not in preset params", cached_param)
     
     if not token_param_name:
-        # Check preset parameters first - prioritize max_tokens for non-GPT5 models
-        if not is_gpt5 and "max_tokens" in preset_param_names:
-            token_param_name = "max_tokens"
-        elif is_gpt5 and "max_completion_tokens" in preset_param_names:
-            token_param_name = "max_completion_tokens"
-        elif "max_completion_tokens" in preset_param_names:
-            token_param_name = "max_completion_tokens"
-        elif "max_tokens" in preset_param_names:
-            token_param_name = "max_tokens"
-        else:
-            # Default fallback based on model type
-            token_param_name = "max_completion_tokens" if is_gpt5 else "max_tokens"
+        # Use preset-based logic
+        token_param_name = preferred_token_param
     
     # Enforce optional preset limits by clamping and ensure integer type
     final_max_tokens = max_tokens
@@ -285,17 +368,64 @@ def resolve_token_parameters(
     return {token_param_name: final_max_tokens}, token_param_name
 
 
+async def execute_openai_chat_completion(
+    client,
+    model: str,
+    messages: list[dict[str, Any]],
+    token_kwargs: dict[str, Any] = None,
+    sampler_kwargs: dict[str, Any] = None,
+    tool_kwargs: dict[str, Any] = None,
+    custom_kwargs: dict[str, Any] = None,
+    response_format: dict[str, Any] = None,
+    logger = None,
+) -> Any:
+    """Execute OpenAI chat completion with standardized parameter handling.
+    
+    Args:
+        client: OpenAI client instance
+        model: Model name
+        messages: List of message dictionaries
+        token_kwargs: Token-related parameters
+        sampler_kwargs: Sampling parameters (temperature, top_p)
+        tool_kwargs: Tool/function call parameters
+        custom_kwargs: Custom model-specific parameters
+        response_format: Response format specification
+        logger: Logger instance
+        
+    Returns:
+        OpenAI API response
+    """
+    # Merge all parameter dictionaries
+    request_kwargs = {
+        "model": model,
+        "messages": messages,
+        **(token_kwargs or {}),
+        **(sampler_kwargs or {}),
+        **(tool_kwargs or {}),
+        **(custom_kwargs or {}),
+    }
+    
+    if response_format:
+        request_kwargs["response_format"] = response_format
+    
+    if logger:
+        logger.debug("OpenAI request parameters: %s", request_kwargs)
+    
+    return await client.chat.completions.create(**request_kwargs)
+
+
 async def execute_openai_request_with_fallbacks(
     client,
     model: str,
-    messages: list,
-    token_kwargs: dict[str, int],
-    sampler_kwargs: dict[str, Any] | None = None,
-    reasoning_kwargs: dict[str, Any] | None = None,
-    tool_kwargs: dict[str, Any] | None = None,
-    base_kwargs: dict[str, Any] | None = None,
+    messages: list[dict[str, Any]],
+    token_kwargs: dict[str, Any],
+    sampler_kwargs: dict[str, Any],
+    tool_kwargs: dict[str, Any],
+    custom_kwargs: dict[str, Any],
+    token_param_name: str,
+    logger,
     token_param_cache: dict[str, str] | None = None,
-):
+) -> Any:
     """Execute OpenAI API request with automatic fallbacks for unsupported parameters.
     
     Args:
@@ -424,21 +554,19 @@ def build_sampler_kwargs(
         Dictionary of sampler parameters to include in API request
     """
     preset_param_names = get_param_names(preset) if preset else set()
-    is_gpt5 = "gpt-5" in str(model).lower()
     
     sampler_kwargs: dict[str, Any] = {}
     
-    if is_gpt5:
-        # Some GPT-5 variants only allow default sampler values; omit non-defaults to prevent 400
-        if "temperature" in preset_param_names and temperature == 1:
-            sampler_kwargs["temperature"] = temperature
-        if "top_p" in preset_param_names and top_p == 1:
-            sampler_kwargs["top_p"] = top_p
+    # Use preset-based logic for all models
+    if not preset:
+        # No preset: include standard parameters
+        sampler_kwargs["temperature"] = temperature
+        sampler_kwargs["top_p"] = top_p
     else:
-        # For non-GPT-5 models, include parameters if they're in the preset or no preset exists
-        if not preset or "temperature" in preset_param_names:
+        # Preset exists: only include parameters defined in the preset
+        if "temperature" in preset_param_names:
             sampler_kwargs["temperature"] = temperature
-        if not preset or "top_p" in preset_param_names:
+        if "top_p" in preset_param_names:
             sampler_kwargs["top_p"] = top_p
     
     return sampler_kwargs
@@ -729,6 +857,50 @@ def handle_file_error(err: Exception, file_path: str, operation: str, logger) ->
         logger.error("Invalid file format during %s: %s - %s", operation, file_path, err)
     else:
         logger.error("File operation error during %s: %s - %s", operation, file_path, err)
+
+
+def safe_execute(operation_name: str, logger, default_return=None):
+    """Decorator for standardized exception handling.
+    
+    Args:
+        operation_name: Name of the operation for logging
+        logger: Logger instance to use
+        default_return: Default value to return on error
+        
+    Returns:
+        Decorator function
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as err:
+                logger.error("Error during %s: %s", operation_name, err, exc_info=True)
+                return default_return
+        return wrapper
+    return decorator
+
+
+def safe_execute_async(operation_name: str, logger, default_return=None):
+    """Async decorator for standardized exception handling.
+    
+    Args:
+        operation_name: Name of the operation for logging
+        logger: Logger instance to use
+        default_return: Default value to return on error
+        
+    Returns:
+        Async decorator function
+    """
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as err:
+                logger.error("Error during %s: %s", operation_name, err, exc_info=True)
+                return default_return
+        return wrapper
+    return decorator
 
 
 def convert_to_template(

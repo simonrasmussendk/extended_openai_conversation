@@ -26,7 +26,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.httpx_client import get_async_client
 
-from .helpers import is_azure, create_openai_client
+from .helpers import create_openai_client, extract_and_validate_model_params
 from homeassistant.const import CONF_API_KEY
 from .const import (
     CONF_API_VERSION,
@@ -128,7 +128,12 @@ class ExtendedOpenAISttProvider(Provider):
         self._base_url: str | None = options.get(CONF_STT_BASE_URL) or data.get(CONF_BASE_URL)
         self._api_version: str | None = options.get(CONF_STT_API_VERSION) or data.get(CONF_API_VERSION)
         self._organization: str | None = options.get(CONF_STT_ORGANIZATION) or data.get(CONF_ORGANIZATION)
-        self._model: str = options.get(CONF_STT_MODEL, DEFAULT_STT_MODEL)
+        # Extract model parameters using centralized function
+        params = extract_and_validate_model_params(self._entry.options)
+        self._model = params["model"]
+        self._max_tokens = params["max_tokens"]
+        self._temperature = params["temperature"]
+        self._top_p = params["top_p"]
         self._language: str = options.get(CONF_STT_LANGUAGE, DEFAULT_STT_LANGUAGE)
 
         _LOGGER.debug(

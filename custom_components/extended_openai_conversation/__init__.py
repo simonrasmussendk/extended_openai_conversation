@@ -87,6 +87,8 @@ from .exceptions import (
 from .helpers import (
     get_function_executor,
     is_azure,
+    get_preferred_token_param,
+    extract_and_validate_model_params,
     validate_authentication,
     log_openai_interaction,
     get_domain_entity_attributes,
@@ -774,47 +776,45 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                 user_input, messages, message, exposed_entities, n_requests + 1
             )
         if choice.finish_reason == "length":
-            # If we used max_tokens, some GPT-5 style backends require max_completion_tokens instead.
-            # Retry once swapping the token parameter (same numeric cap), then cache the result.
+            # If we hit token length limit, try the alternative token parameter.
+            # This handles cases where the preset/cache had the wrong parameter.
             used_token_param = list(token_kwargs.keys())[0]
             if used_token_param == "max_tokens":
-                alt_param = "max_completion_tokens"
-                alt_token_value = int(list(token_kwargs.values())[0])  # Ensure integer
-                _LOGGER.debug(
-                    "Finish reason 'length' with %s=%s; retrying once with %s",
-                    used_token_param,
-                    alt_token_value,
-                    alt_param,
-                )
-
-                def execute_retry_swap_param() -> ChatCompletion:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        return loop.run_until_complete(
-                            self.client.chat.completions.create(
-                                model=model,
-                                messages=messages,
-                                user=user_input.conversation_id,
-                                **tool_kwargs,
-                                **sampler_kwargs,
-                                **{alt_param: alt_token_value},
-                            )
-                        )
-                    finally:
-                        loop.close()
-
-                response_retry: ChatCompletion = await self.hass.async_add_executor_job(execute_retry_swap_param)
-                # Cache discovered capability
-                self._token_param_cache[str(model)] = alt_param
-                response = response_retry
-                choice = response.choices[0]
-                message = choice.message
-                if choice.finish_reason == "length":
-                    # If swap fails at transport level, surface the original condition
-                    raise TokenLengthExceededError(response.usage.completion_tokens)
+                alt_token_param = "max_completion_tokens"
             else:
+                alt_token_param = "max_tokens"
+            
+            alt_token_value = list(token_kwargs.values())[0]
+
+            def execute_retry_swap_param() -> ChatCompletion:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(
+                        self.client.chat.completions.create(
+                            model=model,
+                            messages=messages,
+                            user=user_input.conversation_id,
+                            **tool_kwargs,
+                            **sampler_kwargs,
+                            **{alt_token_param: alt_token_value},
+                        )
+                    )
+                finally:
+                    loop.close()
+
+            response_retry: ChatCompletion = await self.hass.async_add_executor_job(execute_retry_swap_param)
+            # Cache the working token parameter for this model
+            if alt_token_param in ["max_tokens", "max_completion_tokens"]:
+                self._token_param_cache[str(model)] = alt_token_param
+            response = response_retry
+            choice = response.choices[0]
+            message = choice.message
+            if choice.finish_reason == "length":
+                # If swap fails at transport level, surface the original condition
                 raise TokenLengthExceededError(response.usage.completion_tokens)
+        else:
+            raise TokenLengthExceededError(response.usage.completion_tokens)
 
         return OpenAIQueryResponse(response=response, message=message)
 
